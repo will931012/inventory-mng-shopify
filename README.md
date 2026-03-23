@@ -1,11 +1,12 @@
 # Inventory Shopify Manager
 
-Base inicial para una app de Shopify embebida con Remix, Polaris y Prisma.
+Base inicial para una app de Shopify embebida con Remix y Prisma.
 
 ## Requisitos
 
 - Node.js 20+
 - Una app creada en Shopify Partners
+- Una base de datos PostgreSQL para despliegue
 - Variables en `.env`
 
 ## Variables de entorno
@@ -28,4 +29,4 @@ npm run dev
 
 ## Siguiente paso
 
-Conecta el proyecto con tu app de Shopify Partner y luego ajustamos autenticación, webhooks y la lógica de inventario que necesite tu tienda.
+Conecta el proyecto con tu app de Shopify Partner, configura una base PostgreSQL en Vercel y luego ajustamos autenticación, webhooks y la lógica de inventario que necesite tu tienda.
