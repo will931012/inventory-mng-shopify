@@ -1,0 +1,12 @@
+node_modules
+.cache
+.shopify
+build
+dist
+.env
+.env.*
+!.env.example
+coverage
+*.log
+prisma/dev.sqlite
+prisma/dev.sqlite-journal
