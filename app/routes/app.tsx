@@ -1,7 +1,9 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { NavLink, Outlet, useLoaderData, useLocation } from "@remix-run/react";
+import { NavLink, Outlet, useLoaderData, useLocation, useRouteError } from "@remix-run/react";
 import type { CSSProperties } from "react";
+import { AppProvider } from "@shopify/shopify-app-remix/react";
+import { boundary } from "@shopify/shopify-app-remix/server";
 
 import { authenticate } from "../shopify.server";
 
@@ -43,12 +45,7 @@ export default function AppLayout() {
   const currentParams = new URLSearchParams(location.search);
 
   return (
-    <>
-      <script
-        dangerouslySetInnerHTML={{
-          __html: `window.shopifyApiKey = ${JSON.stringify(apiKey)};`
-        }}
-      />
+    <AppProvider apiKey={apiKey} isEmbeddedApp>
       <div className="app-shell" style={shellStyle}>
         <aside className="app-sidebar" style={sidebarStyle}>
           <div
@@ -131,9 +128,15 @@ export default function AppLayout() {
           <Outlet />
         </div>
       </div>
-    </>
+    </AppProvider>
   );
 }
+
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
+}
+
+export const headers = boundary.headers;
 
 const shellStyle: CSSProperties = {
   minHeight: "100vh"
