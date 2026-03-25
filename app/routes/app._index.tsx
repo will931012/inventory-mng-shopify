@@ -8,6 +8,7 @@ import {
   createProduct,
   csvTemplate,
   deleteProducts,
+  fetchAllProductIdsWithZeroPrice,
   fetchInventoryDashboard,
   importProductsFromCsv,
   updateProductRecord,
@@ -160,6 +161,21 @@ export async function action({ request }: ActionFunctionArgs) {
       });
     }
 
+    if (intent === "delete-all-products-with-zero-price") {
+      const productIds = await fetchAllProductIdsWithZeroPrice(admin);
+      const result = await deleteProducts(admin, productIds);
+
+      return json<ActionData>({
+        ok: true,
+        message:
+          productIds.length === 0
+            ? "No habia productos con precio 0.00 para eliminar en toda la tienda."
+            : result.skippedMissingCount > 0
+              ? `${result.deletedCount} producto(s) con precio 0.00 eliminados en toda la tienda. ${result.skippedMissingCount} ya no existian en Shopify.`
+              : `${result.deletedCount} producto(s) con precio 0.00 eliminados correctamente en toda la tienda.`
+      });
+    }
+
     if (intent === "update-inventory") {
       await updateVariantInventory(
         admin,
@@ -212,6 +228,7 @@ export default function AppDashboard() {
   const currentParams = new URLSearchParams(location.search);
   const activeView = tabs.some((tab) => tab.id === data.view) ? data.view : "overview";
   const isSubmitting = navigation.state === "submitting";
+  const submittingIntent = navigation.formData?.get("intent");
 
   return (
     <main style={{ color: "#0f172a" }}>
@@ -340,6 +357,7 @@ export default function AppDashboard() {
           query={data.query}
           products={data.products}
           isSubmitting={isSubmitting}
+          submittingIntent={String(submittingIntent ?? "")}
         />
       ) : null}
     </main>
@@ -408,7 +426,8 @@ function CatalogPanel({
   selectedLocationId,
   query,
   products,
-  isSubmitting
+  isSubmitting,
+  submittingIntent
 }: {
   shopDomain?: string;
   currencyCode: string;
@@ -416,26 +435,47 @@ function CatalogPanel({
   query: string;
   products: Awaited<ReturnType<typeof fetchInventoryDashboard>>["products"];
   isSubmitting: boolean;
+  submittingIntent: string;
 }) {
+  const deletingViewZeroPrice = isSubmitting && submittingIntent === "delete-products-with-zero-price";
+  const deletingAllZeroPrice = isSubmitting && submittingIntent === "delete-all-products-with-zero-price";
+
   return (
     <section style={{ ...panelStyle, marginTop: "1rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
         <div>
           <h2 className="excel-title" style={{ marginBottom: 0 }}>Catalogo e inventario</h2>
           <p className="excel-subtle" style={{ marginBottom: 0 }}>Acciones por producto: abrir, editar rapido, ajustar cantidad y borrar.</p>
+          {deletingAllZeroPrice ? (
+            <p className="excel-subtle" style={{ marginTop: "0.4rem", color: "#b45309" }}>
+              Procesando borrado global de productos con precio 0.00...
+            </p>
+          ) : null}
         </div>
-        <Form method="post" onSubmit={(event) => {
-          if (!window.confirm("Se eliminaran los productos de esta vista que tengan precio 0.00. Deseas continuar?")) {
-            event.preventDefault();
-          }
-        }}>
-          <input type="hidden" name="intent" value="delete-products-with-zero-price" />
-          <input type="hidden" name="locationId" value={selectedLocationId} />
-          <input type="hidden" name="query" value={query} />
-          <button type="submit" disabled={isSubmitting} className="danger-button">
-            Borrar vista 0.00
-          </button>
-        </Form>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <Form method="post" onSubmit={(event) => {
+            if (!window.confirm("Se eliminaran los productos de esta vista que tengan precio 0.00. Deseas continuar?")) {
+              event.preventDefault();
+            }
+          }}>
+            <input type="hidden" name="intent" value="delete-products-with-zero-price" />
+            <input type="hidden" name="locationId" value={selectedLocationId} />
+            <input type="hidden" name="query" value={query} />
+            <button type="submit" disabled={isSubmitting} className="danger-button">
+              {deletingViewZeroPrice ? "Borrando vista..." : "Borrar vista 0.00"}
+            </button>
+          </Form>
+          <Form method="post" onSubmit={(event) => {
+            if (!window.confirm("Se eliminaran todos los productos de la tienda que tengan precio 0.00. Deseas continuar?")) {
+              event.preventDefault();
+            }
+          }}>
+            <input type="hidden" name="intent" value="delete-all-products-with-zero-price" />
+            <button type="submit" disabled={isSubmitting} className="danger-button">
+              {deletingAllZeroPrice ? "Borrando toda la tienda..." : "Borrar todos 0.00"}
+            </button>
+          </Form>
+        </div>
       </div>
       <Form method="post">
         <input type="hidden" name="intent" value="delete-products" />
