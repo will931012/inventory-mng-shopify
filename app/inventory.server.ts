@@ -85,6 +85,23 @@ type GraphQLResponse<T> = {
   errors?: GraphQLError[];
 };
 
+type ProductsWithoutImagesPage = {
+  products: {
+    edges: Array<{
+      cursor: string;
+      node: {
+        id: string;
+        featuredImage: {
+          url: string;
+        } | null;
+      };
+    }>;
+    pageInfo: {
+      hasNextPage: boolean;
+    };
+  };
+};
+
 function normalizeTags(tags: string | string[]) {
   return (Array.isArray(tags) ? tags : tags.split(","))
     .map((tag) => tag.trim())
@@ -233,6 +250,54 @@ async function fetchLocations(admin: AdminClient) {
   } catch {
     return [];
   }
+}
+
+export async function fetchAllProductIdsWithoutImages(admin: AdminClient) {
+  const productIds: string[] = [];
+  let cursor: string | null = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const data: ProductsWithoutImagesPage = await executeGraphQL<ProductsWithoutImagesPage>(
+      admin,
+      `#graphql
+        query ProductsWithoutImagesPage($cursor: String) {
+          products(first: 100, after: $cursor, sortKey: ID) {
+            edges {
+              cursor
+              node {
+                id
+                featuredImage {
+                  url
+                }
+              }
+            }
+            pageInfo {
+              hasNextPage
+            }
+          }
+        }
+      `,
+      {
+        cursor
+      }
+    );
+
+    for (const edge of data.products.edges) {
+      if (!edge.node.featuredImage?.url) {
+        productIds.push(edge.node.id);
+      }
+    }
+
+    hasNextPage = data.products.pageInfo.hasNextPage;
+    cursor = data.products.edges.at(-1)?.cursor ?? null;
+
+    if (!cursor) {
+      hasNextPage = false;
+    }
+  }
+
+  return productIds;
 }
 
 export async function fetchInventoryDashboard(
