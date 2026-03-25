@@ -1,6 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { Form, Link, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
+import { Form, Link, useActionData, useLoaderData, useLocation, useNavigation } from "@remix-run/react";
 import type { CSSProperties } from "react";
 
 import {
@@ -189,8 +189,10 @@ export default function AppDashboard() {
   } = useLoaderData<typeof loader>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
+  const location = useLocation();
   const isSubmitting = navigation.state === "submitting";
   const activeView = tabs.some((tab) => tab.id === view) ? view : "overview";
+  const currentParams = new URLSearchParams(location.search);
 
   return (
     <main style={{ color: "#0f172a" }}>
@@ -287,13 +289,17 @@ export default function AppDashboard() {
       <section style={{ marginTop: "1rem", display: "flex", gap: "0.8rem", flexWrap: "wrap" }}>
         {tabs.map((tab) => {
           const isActive = activeView === tab.id;
-          const baseParams = new URLSearchParams();
+          const baseParams = new URLSearchParams(currentParams);
           baseParams.set("view", tab.id);
           if (selectedLocationId) {
             baseParams.set("locationId", selectedLocationId);
+          } else {
+            baseParams.delete("locationId");
           }
           if (query) {
             baseParams.set("q", query);
+          } else {
+            baseParams.delete("q");
           }
 
           return (
