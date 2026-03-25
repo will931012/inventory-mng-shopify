@@ -2,7 +2,7 @@
 
 client_id = "2efea16a36320600aa672d4800775937"
 name = "Inventory Management"
-application_url = "https://inventory-mng-shopify-hnduge94v-will931012s-projects.vercel.app"
+application_url = "https://inventory-mng-shopify.vercel.app"
 embedded = true
 handle = "inventory-mng-grace"
 web_directories = ["."]
@@ -18,7 +18,7 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://inventory-mng-shopify-hnduge94v-will931012s-projects.vercel.app/auth/callback"
+  "https://inventory-mng-shopify.vercel.app/auth/callback"
 ]
 
 [build]
