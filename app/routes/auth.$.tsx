@@ -5,8 +5,7 @@ import { authenticate } from "../shopify.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
-    await authenticate.admin(request);
-    return null;
+    return await authenticate.admin(request);
   } catch (error) {
     if (error instanceof Response) {
       throw error;
