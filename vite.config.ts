@@ -1,8 +1,9 @@
 import { vitePlugin as remix } from "@remix-run/dev";
+import { vercelPreset } from "@vercel/remix/vite";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  plugins: [remix()],
+  plugins: [remix({ presets: [vercelPreset()] })],
   server: {
     port: 3000
   }
