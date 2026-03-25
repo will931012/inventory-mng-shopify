@@ -8,7 +8,6 @@ import {
   createProduct,
   csvTemplate,
   deleteProducts,
-  fetchAllProductIdsWithZeroPrice,
   fetchInventoryDashboard,
   importProductsFromCsv,
   updateProductRecord,
@@ -143,7 +142,10 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     if (intent === "delete-products-with-zero-price") {
-      const productIds = await fetchAllProductIdsWithZeroPrice(admin);
+      const dashboard = await fetchInventoryDashboard(admin, query, locationId);
+      const productIds = dashboard.products
+        .filter((product) => product.variants.some((variant) => Number(variant.price ?? "0") === 0))
+        .map((product) => product.id);
 
       const result = await deleteProducts(admin, productIds);
 
@@ -151,10 +153,10 @@ export async function action({ request }: ActionFunctionArgs) {
         ok: true,
         message:
           productIds.length === 0
-            ? "No habia productos con precio 0.00 para eliminar."
+            ? "No habia productos con precio 0.00 en esta vista para eliminar."
             : result.skippedMissingCount > 0
-              ? `${result.deletedCount} producto(s) con precio 0.00 eliminados. ${result.skippedMissingCount} ya no existian en Shopify.`
-              : `${result.deletedCount} producto(s) con precio 0.00 eliminados correctamente.`
+              ? `${result.deletedCount} producto(s) con precio 0.00 eliminados en esta vista. ${result.skippedMissingCount} ya no existian en Shopify.`
+              : `${result.deletedCount} producto(s) con precio 0.00 eliminados correctamente en esta vista.`
       });
     }
 
@@ -335,6 +337,7 @@ export default function AppDashboard() {
           shopDomain={data.shop?.myshopifyDomain}
           currencyCode={data.shop?.currencyCode ?? "USD"}
           selectedLocationId={data.selectedLocationId}
+          query={data.query}
           products={data.products}
           isSubmitting={isSubmitting}
         />
@@ -403,12 +406,14 @@ function CatalogPanel({
   shopDomain,
   currencyCode,
   selectedLocationId,
+  query,
   products,
   isSubmitting
 }: {
   shopDomain?: string;
   currencyCode: string;
   selectedLocationId: string;
+  query: string;
   products: Awaited<ReturnType<typeof fetchInventoryDashboard>>["products"];
   isSubmitting: boolean;
 }) {
@@ -420,13 +425,15 @@ function CatalogPanel({
           <p className="excel-subtle" style={{ marginBottom: 0 }}>Acciones por producto: abrir, editar rapido, ajustar cantidad y borrar.</p>
         </div>
         <Form method="post" onSubmit={(event) => {
-          if (!window.confirm("Se eliminaran todos los productos de la tienda que tengan precio 0.00. Deseas continuar?")) {
+          if (!window.confirm("Se eliminaran los productos de esta vista que tengan precio 0.00. Deseas continuar?")) {
             event.preventDefault();
           }
         }}>
           <input type="hidden" name="intent" value="delete-products-with-zero-price" />
+          <input type="hidden" name="locationId" value={selectedLocationId} />
+          <input type="hidden" name="query" value={query} />
           <button type="submit" disabled={isSubmitting} className="danger-button">
-            Borrar todos 0.00
+            Borrar vista 0.00
           </button>
         </Form>
       </div>
