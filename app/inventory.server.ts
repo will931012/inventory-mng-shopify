@@ -836,6 +836,23 @@ export async function createProduct(
   }
 }
 
+export async function updateProductRecord(
+  admin: AdminClient,
+  locationId: string,
+  productId: string,
+  variantId: string,
+  inventoryItemId: string,
+  input: ProductUpsertInput
+) {
+  await updateProductBasics(admin, productId, input);
+  await updateVariantDetails(admin, productId, variantId, input);
+  await updateInventoryItem(admin, inventoryItemId, input);
+
+  if (locationId) {
+    await updateVariantInventory(admin, locationId, inventoryItemId, input.quantity);
+  }
+}
+
 export async function updateVariantInventory(
   admin: AdminClient,
   locationId: string,

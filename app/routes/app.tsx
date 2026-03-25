@@ -47,8 +47,8 @@ export default function AppLayout() {
           __html: `window.shopifyApiKey = ${JSON.stringify(apiKey)};`
         }}
       />
-      <div style={shellStyle}>
-        <aside style={sidebarStyle}>
+      <div className="app-shell" style={shellStyle}>
+        <aside className="app-sidebar" style={sidebarStyle}>
           <div
             style={{
               borderRadius: "1.3rem",
@@ -111,7 +111,7 @@ export default function AppLayout() {
           </div>
         </aside>
 
-        <div style={contentStyle}>
+        <div className="app-content" style={contentStyle}>
           <header style={headerStyle}>
             <div>
               <p style={{ margin: 0, color: "#f59e0b", fontWeight: 800, letterSpacing: "0.08em" }}>
@@ -133,19 +133,11 @@ export default function AppLayout() {
 }
 
 const shellStyle: CSSProperties = {
-  minHeight: "100vh",
-  display: "grid",
-  gridTemplateColumns: "280px minmax(0, 1fr)",
-  background:
-    "linear-gradient(180deg, #0f172a 0%, #111827 18%, #f8fafc 18%, #eef2ff 100%)"
+  minHeight: "100vh"
 };
 
 const sidebarStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: "0.75rem",
-  padding: "1.25rem",
-  color: "#f8fafc"
+  display: "flex"
 };
 
 const navLinkStyle: CSSProperties = {
@@ -161,8 +153,7 @@ const navLinkStyle: CSSProperties = {
 };
 
 const contentStyle: CSSProperties = {
-  minWidth: 0,
-  padding: "1.25rem 1.25rem 2rem"
+  minWidth: 0
 };
 
 const headerStyle: CSSProperties = {
