@@ -51,24 +51,17 @@ export default function AppLayout() {
         <aside className="app-sidebar" style={sidebarStyle}>
           <div
             style={{
-              borderRadius: "1.3rem",
-              padding: "1.2rem",
-              background:
-                "linear-gradient(145deg, rgba(245,158,11,0.2), rgba(15,23,42,0.96) 60%)"
+              padding: "0.75rem",
+              background: "#ffffff",
+              border: "1px solid #d1d5db"
             }}
           >
-            <p style={{ margin: 0, color: "#fbbf24", fontWeight: 800, letterSpacing: "0.08em" }}>
-              INVENTORY
-            </p>
-            <h1 style={{ marginBottom: "0.5rem", marginTop: "0.5rem", fontSize: "1.4rem" }}>
-              Control Center
-            </h1>
-            <p style={{ margin: 0, color: "rgba(241,245,249,0.75)", lineHeight: 1.6 }}>
-              Productos, inventario, importaciones y operaciones en un solo lugar.
-            </p>
+            <p style={{ margin: 0, color: "#6b7280", fontWeight: 700, fontSize: "11px", letterSpacing: "0.04em" }}>INVENTORY</p>
+            <h1 style={{ marginBottom: "0.25rem", marginTop: "0.35rem", fontSize: "14px" }}>Control Center</h1>
+            <p style={{ margin: 0, color: "#6b7280", lineHeight: 1.4, fontSize: "12px" }}>Vista compacta para catalogo e inventario.</p>
           </div>
 
-          <nav style={{ marginTop: "1.25rem", display: "grid", gap: "0.65rem" }}>
+          <nav style={{ marginTop: "0.75rem", display: "grid", gap: "0.35rem" }}>
             {sections.map((section) => (
               <NavLink
                 key={section.label}
@@ -98,14 +91,14 @@ export default function AppLayout() {
           <div
             style={{
               marginTop: "auto",
-              paddingTop: "1rem",
-              borderTop: "1px solid rgba(148,163,184,0.18)"
+              paddingTop: "0.75rem",
+              borderTop: "1px solid #d1d5db"
             }}
           >
-            <p style={{ margin: 0, color: "rgba(148,163,184,0.8)", fontSize: "0.85rem" }}>
+            <p style={{ margin: 0, color: "#6b7280", fontSize: "11px" }}>
               Store session
             </p>
-            <strong style={{ display: "block", marginTop: "0.35rem", wordBreak: "break-word" }}>
+            <strong style={{ display: "block", marginTop: "0.25rem", wordBreak: "break-word", fontSize: "12px" }}>
               {shop}
             </strong>
           </div>
@@ -114,14 +107,14 @@ export default function AppLayout() {
         <div className="app-content" style={contentStyle}>
           <header style={headerStyle}>
             <div>
-              <p style={{ margin: 0, color: "#f59e0b", fontWeight: 800, letterSpacing: "0.08em" }}>
+              <p style={{ margin: 0, color: "#6b7280", fontWeight: 700, letterSpacing: "0.04em", fontSize: "11px" }}>
                 SHOPIFY ADMIN APP
               </p>
-              <h2 style={{ margin: "0.35rem 0 0", fontSize: "1.6rem" }}>Inventory Management</h2>
+              <h2 style={{ margin: "0.2rem 0 0", fontSize: "16px" }}>Inventory Management</h2>
             </div>
             <div style={headerBadgeStyle}>
-              <span style={{ color: "#475569" }}>Embedded admin</span>
-              <strong style={{ color: "#0f172a" }}>Live</strong>
+              <span style={{ color: "#475569", fontSize: "11px" }}>Embedded admin</span>
+              <strong style={{ color: "#0f172a", fontSize: "11px" }}>Live</strong>
             </div>
           </header>
 
@@ -143,12 +136,13 @@ const sidebarStyle: CSSProperties = {
 const navLinkStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: "0.8rem",
-  border: "1px solid rgba(148,163,184,0.15)",
-  borderRadius: "1rem",
-  padding: "0.9rem 1rem",
+  gap: "0.55rem",
+  border: "1px solid #d1d5db",
+  borderRadius: 0,
+  padding: "0.6rem 0.7rem",
   textDecoration: "none",
-  fontWeight: 700,
+  fontWeight: 600,
+  fontSize: "12px",
   transition: "all 160ms ease"
 };
 
@@ -161,21 +155,20 @@ const headerStyle: CSSProperties = {
   justifyContent: "space-between",
   alignItems: "center",
   gap: "1rem",
-  marginBottom: "1rem",
-  background: "rgba(255,255,255,0.78)",
-  backdropFilter: "blur(16px)",
-  border: "1px solid rgba(226,232,240,0.9)",
-  borderRadius: "1.3rem",
-  padding: "1rem 1.2rem",
-  boxShadow: "0 20px 45px rgba(15, 23, 42, 0.08)"
+  marginBottom: "0.75rem",
+  background: "#ffffff",
+  border: "1px solid #d1d5db",
+  borderRadius: 0,
+  padding: "0.7rem 0.9rem",
+  boxShadow: "none"
 };
 
 const headerBadgeStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: "0.6rem",
-  borderRadius: "999px",
-  background: "#ffffff",
-  padding: "0.5rem 0.85rem",
-  border: "1px solid #e2e8f0"
+  gap: "0.45rem",
+  borderRadius: 0,
+  background: "#f9fafb",
+  padding: "0.35rem 0.55rem",
+  border: "1px solid #d1d5db"
 };

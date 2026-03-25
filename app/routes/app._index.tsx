@@ -26,32 +26,34 @@ const tabs = [
 
 const inputStyle: CSSProperties = {
   border: "1px solid #cbd5e1",
-  borderRadius: "0.85rem",
-  padding: "0.85rem 1rem",
-  fontSize: "1rem",
+  borderRadius: 0,
+  padding: "0.55rem 0.65rem",
+  fontSize: "12px",
   width: "100%"
 };
 
 const panelStyle: CSSProperties = {
   background: "#ffffff",
-  borderRadius: "1.25rem",
-  padding: "1.5rem",
-  boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)"
+  borderRadius: 0,
+  padding: "0.85rem",
+  boxShadow: "none",
+  border: "1px solid #d1d5db"
 };
 
 const darkButton: CSSProperties = {
-  border: 0,
-  borderRadius: "0.9rem",
-  background: "#0f172a",
-  color: "#fff",
-  padding: "0.85rem 1rem",
-  fontWeight: 700,
-  cursor: "pointer"
+  border: "1px solid #d1d5db",
+  borderRadius: 0,
+  background: "#f9fafb",
+  color: "#111827",
+  padding: "0.5rem 0.7rem",
+  fontWeight: 600,
+  cursor: "pointer",
+  fontSize: "12px"
 };
 
 const amberButton: CSSProperties = {
   ...darkButton,
-  background: "#f59e0b",
+  background: "#f3f4f6",
   color: "#111827"
 };
 
@@ -190,25 +192,26 @@ export default function AppDashboard() {
     <main style={{ color: "#0f172a" }}>
       <section
         style={{
-          background: "linear-gradient(135deg, rgba(15,23,42,0.96), rgba(30,41,59,0.96))",
-          color: "#f8fafc",
-          borderRadius: "1.6rem",
-          padding: "1.6rem",
-          boxShadow: "0 28px 60px rgba(15, 23, 42, 0.18)"
+          background: "#ffffff",
+          color: "#111827",
+          borderRadius: 0,
+          padding: "0.85rem",
+          boxShadow: "none",
+          border: "1px solid #d1d5db"
         }}
       >
-        <p style={{ margin: 0, color: "#f59e0b", fontWeight: 800, letterSpacing: "0.08em" }}>INVENTORY MANAGEMENT</p>
-        <div style={{ marginTop: "0.9rem", display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+        <p style={{ margin: 0, color: "#6b7280", fontWeight: 700, letterSpacing: "0.04em", fontSize: "11px" }}>INVENTORY MANAGEMENT</p>
+        <div style={{ marginTop: "0.45rem", display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: "2.2rem", lineHeight: 1.05 }}>Gestion centralizada de tu catalogo Shopify</h1>
-            <p style={{ marginBottom: 0, color: "rgba(248,250,252,0.78)", maxWidth: "48rem" }}>
-              Navega por vistas, importa y exporta inventario, crea productos y ejecuta operaciones masivas.
+            <h1 style={{ margin: 0, fontSize: "18px", lineHeight: 1.2 }}>Catalogo e inventario</h1>
+            <p style={{ marginBottom: 0, color: "#6b7280", maxWidth: "48rem", fontSize: "12px" }}>
+              Vista compacta para trabajar rapido con productos, stock e importaciones.
             </p>
           </div>
-          <div style={{ minWidth: "18rem", background: "rgba(255,255,255,0.08)", borderRadius: "1rem", padding: "1rem" }}>
-            <p style={{ margin: 0, fontSize: "0.85rem", color: "rgba(248,250,252,0.6)" }}>Tienda conectada</p>
-            <strong style={{ display: "block", marginTop: "0.35rem", fontSize: "1.05rem" }}>{data.shop?.name ?? "Tienda Shopify"}</strong>
-            <span style={{ color: "rgba(248,250,252,0.75)" }}>{data.shop?.myshopifyDomain ?? "Dominio no disponible"}</span>
+          <div style={{ minWidth: "16rem", background: "#f9fafb", borderRadius: 0, padding: "0.55rem", border: "1px solid #d1d5db" }}>
+            <p style={{ margin: 0, fontSize: "11px", color: "#6b7280" }}>Tienda conectada</p>
+            <strong style={{ display: "block", marginTop: "0.2rem", fontSize: "12px" }}>{data.shop?.name ?? "Tienda Shopify"}</strong>
+            <span style={{ color: "#6b7280", fontSize: "11px" }}>{data.shop?.myshopifyDomain ?? "Dominio no disponible"}</span>
           </div>
         </div>
       </section>
@@ -220,7 +223,7 @@ export default function AppDashboard() {
         </section>
       ) : null}
 
-      <section className="dashboard-tabs" style={{ marginTop: "1rem" }}>
+      <section className="dashboard-tabs" style={{ marginTop: "0.75rem" }}>
         {tabs.map((tab) => {
           const params = new URLSearchParams(currentParams);
           params.set("view", tab.id);
@@ -233,10 +236,10 @@ export default function AppDashboard() {
               to={`/app?${params.toString()}`}
               prefetch="intent"
               style={{
-                display: "inline-flex", alignItems: "center", gap: "0.65rem", padding: "0.85rem 1rem",
-                borderRadius: "999px", textDecoration: "none", fontWeight: 700,
+                display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.45rem 0.65rem",
+                borderRadius: 0, textDecoration: "none", fontWeight: 600, fontSize: "12px",
                 border: `1px solid ${active ? tab.tone : "#cbd5e1"}`,
-                color: active ? "#0f172a" : "#475569", background: active ? `${tab.tone}22` : "#ffffff"
+                color: active ? "#0f172a" : "#475569", background: active ? "#f3f4f6" : "#ffffff"
               }}
             >
               <span style={{ width: "0.65rem", height: "0.65rem", borderRadius: "999px", background: tab.tone }} />
@@ -247,16 +250,16 @@ export default function AppDashboard() {
       </section>
 
       {activeView === "overview" ? (
-        <section className="metrics-grid" style={{ marginTop: "1rem" }}>
+        <section className="metrics-grid" style={{ marginTop: "0.75rem" }}>
           {[
             { label: "Productos", value: data.summary.productCount },
             { label: "Variantes", value: data.summary.variantCount },
             { label: "Unidades disponibles", value: data.summary.inventoryUnits },
             { label: "Ubicaciones detectadas", value: data.locations.length }
           ].map((card) => (
-            <article key={card.label} style={{ ...panelStyle, padding: "1.25rem" }}>
-              <p style={{ marginTop: 0, color: "#64748b", fontSize: "0.95rem" }}>{card.label}</p>
-              <strong style={{ fontSize: "2rem" }}>{card.value}</strong>
+            <article key={card.label} style={panelStyle}>
+              <p style={{ marginTop: 0, color: "#6b7280", fontSize: "11px", marginBottom: "0.25rem" }}>{card.label}</p>
+              <strong style={{ fontSize: "18px" }}>{card.value}</strong>
             </article>
           ))}
         </section>
@@ -319,7 +322,7 @@ export default function AppDashboard() {
 
 function Banner({ ok, message, errors }: ActionData) {
   return (
-    <section style={{ marginTop: "1rem", background: ok ? "#dcfce7" : "#fee2e2", color: ok ? "#166534" : "#991b1b", borderRadius: "1rem", padding: "1rem 1.2rem" }}>
+    <section style={{ marginTop: "0.75rem", background: ok ? "#f0fdf4" : "#fef2f2", color: ok ? "#166534" : "#991b1b", border: "1px solid #d1d5db", borderRadius: 0, padding: "0.65rem 0.8rem", fontSize: "12px" }}>
       <strong>{message}</strong>
       {errors?.length ? <ul style={{ marginBottom: 0, marginTop: "0.75rem", paddingLeft: "1.25rem" }}>{errors.map((error) => <li key={error}>{error}</li>)}</ul> : null}
     </section>
@@ -329,7 +332,7 @@ function Banner({ ok, message, errors }: ActionData) {
 function CreatePanel({ selectedLocationId, isSubmitting }: { selectedLocationId: string; isSubmitting: boolean }) {
   return (
     <article style={panelStyle}>
-      <h2 style={{ marginTop: 0 }}>Crear producto</h2>
+      <h2 className="excel-title">Crear producto</h2>
       <Form method="post" style={{ display: "grid", gap: "0.8rem" }}>
         <input type="hidden" name="intent" value="create-product" />
         <input type="hidden" name="locationId" value={selectedLocationId} />
@@ -361,8 +364,8 @@ function CreatePanel({ selectedLocationId, isSubmitting }: { selectedLocationId:
 function ImportPanel({ selectedLocationId, isSubmitting }: { selectedLocationId: string; isSubmitting: boolean }) {
   return (
     <article style={panelStyle}>
-      <h2 style={{ marginTop: 0 }}>Importar CSV</h2>
-      <p style={{ color: "#64748b" }}>Si el SKU ya existe, la app actualiza el producto y la cantidad. Si no existe, lo crea.</p>
+      <h2 className="excel-title">Importar CSV</h2>
+      <p className="excel-subtle">Si el SKU ya existe, la app actualiza el producto y la cantidad. Si no existe, lo crea.</p>
       <Form method="post" encType="multipart/form-data" style={{ display: "grid", gap: "0.8rem" }}>
         <input type="hidden" name="intent" value="import-csv" />
         <input type="hidden" name="locationId" value={selectedLocationId} />
@@ -390,8 +393,8 @@ function CatalogPanel({
     <section style={{ ...panelStyle, marginTop: "1rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
         <div>
-          <h2 style={{ margin: 0 }}>Catalogo e inventario</h2>
-          <p style={{ marginBottom: 0, color: "#64748b" }}>Acciones por producto: abrir, editar rapido, ajustar cantidad y borrar.</p>
+          <h2 className="excel-title" style={{ marginBottom: 0 }}>Catalogo e inventario</h2>
+          <p className="excel-subtle" style={{ marginBottom: 0 }}>Acciones por producto: abrir, editar rapido, ajustar cantidad y borrar.</p>
         </div>
       </div>
       <Form method="post">

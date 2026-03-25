@@ -1,26 +1,30 @@
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
-  background: linear-gradient(180deg, #0f172a 0%, #111827 18%, #f8fafc 18%, #eef2ff 100%);
+  grid-template-columns: 220px minmax(0, 1fr);
+  background: #f3f4f6;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .app-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 1.25rem;
-  color: #f8fafc;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  color: #111827;
+  background: #f9fafb;
+  border-right: 1px solid #d1d5db;
 }
 
 .app-content {
   min-width: 0;
-  padding: 1.25rem 1.25rem 2rem;
+  padding: 0.75rem 0.75rem 1rem;
 }
 
 .dashboard-tabs {
   display: flex;
-  gap: 0.8rem;
+  gap: 0.35rem;
   flex-wrap: wrap;
 }
 
@@ -44,13 +48,16 @@
 
 .catalog-table-wrap {
   overflow-x: auto;
-  margin-top: 1rem;
+  margin-top: 0.5rem;
+  border: 1px solid #d1d5db;
+  background: #fff;
 }
 
 .catalog-table {
   width: 100%;
   border-collapse: collapse;
   min-width: 1080px;
+  font-size: 12px;
 }
 
 .catalog-actions {
@@ -61,11 +68,11 @@
 }
 
 .catalog-edit-panel {
-  margin-top: 0.75rem;
-  padding: 0.9rem;
-  border-radius: 1rem;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  margin-top: 0.4rem;
+  padding: 0.65rem;
+  border-radius: 0;
+  background: #f9fafb;
+  border: 1px solid #d1d5db;
 }
 
 .catalog-edit-grid {
@@ -78,39 +85,61 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 0.8rem;
+  border-radius: 0;
   text-decoration: none;
-  font-weight: 700;
-  padding: 0.7rem 0.9rem;
-  background: #eef2ff;
-  color: #3730a3;
-  border: 1px solid #c7d2fe;
+  font-weight: 600;
+  padding: 0.45rem 0.65rem;
+  background: #f9fafb;
+  color: #1f2937;
+  border: 1px solid #d1d5db;
+  font-size: 12px;
 }
 
 .danger-button {
-  border: 0;
-  border-radius: 0.8rem;
-  padding: 0.7rem 0.9rem;
-  background: #991b1b;
+  border: 1px solid #ef4444;
+  border-radius: 0;
+  padding: 0.45rem 0.65rem;
+  background: #fff;
   color: #fff;
-  font-weight: 700;
+  color: #991b1b;
+  font-weight: 600;
   cursor: pointer;
+  font-size: 12px;
 }
 
 .ghost-button {
-  border: 1px solid #cbd5e1;
-  border-radius: 0.8rem;
-  padding: 0.7rem 0.9rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0;
+  padding: 0.45rem 0.65rem;
   background: #fff;
   color: #0f172a;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
+  font-size: 12px;
+}
+
+.excel-panel {
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.excel-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 0.35rem;
+}
+
+.excel-subtle {
+  color: #6b7280;
+  font-size: 12px;
 }
 
 @media (max-width: 1080px) {
   .app-shell {
     grid-template-columns: 1fr;
-    background: linear-gradient(180deg, #0f172a 0%, #111827 12%, #f8fafc 12%, #eef2ff 100%);
+    background: #f3f4f6;
   }
 
   .app-sidebar {
@@ -144,16 +173,16 @@
   }
 
   .catalog-table tr {
-    border: 1px solid #e2e8f0;
-    border-radius: 1rem;
-    margin-bottom: 1rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0;
+    margin-bottom: 0.75rem;
     background: #fff;
     overflow: hidden;
   }
 
   .catalog-table td {
-    border-top: 1px solid #eef2f7;
-    padding: 0.9rem 1rem !important;
+    border-top: 1px solid #e5e7eb;
+    padding: 0.7rem 0.8rem !important;
   }
 
   .catalog-table td:first-child {
