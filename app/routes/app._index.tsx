@@ -8,7 +8,7 @@ import {
   createProduct,
   csvTemplate,
   deleteProducts,
-  fetchAllProductIdsWithoutImages,
+  fetchAllProductIdsWithZeroPrice,
   fetchInventoryDashboard,
   importProductsFromCsv,
   updateProductRecord,
@@ -142,8 +142,8 @@ export async function action({ request }: ActionFunctionArgs) {
       });
     }
 
-    if (intent === "delete-products-without-image") {
-      const productIds = await fetchAllProductIdsWithoutImages(admin);
+    if (intent === "delete-products-with-zero-price") {
+      const productIds = await fetchAllProductIdsWithZeroPrice(admin);
 
       const result = await deleteProducts(admin, productIds);
 
@@ -151,10 +151,10 @@ export async function action({ request }: ActionFunctionArgs) {
         ok: true,
         message:
           productIds.length === 0
-            ? "No habia productos sin imagen para eliminar."
+            ? "No habia productos con precio 0.00 para eliminar."
             : result.skippedMissingCount > 0
-              ? `${result.deletedCount} producto(s) sin imagen eliminados. ${result.skippedMissingCount} ya no existian en Shopify.`
-              : `${result.deletedCount} producto(s) sin imagen eliminados correctamente.`
+              ? `${result.deletedCount} producto(s) con precio 0.00 eliminados. ${result.skippedMissingCount} ya no existian en Shopify.`
+              : `${result.deletedCount} producto(s) con precio 0.00 eliminados correctamente.`
       });
     }
 
@@ -420,13 +420,13 @@ function CatalogPanel({
           <p className="excel-subtle" style={{ marginBottom: 0 }}>Acciones por producto: abrir, editar rapido, ajustar cantidad y borrar.</p>
         </div>
         <Form method="post" onSubmit={(event) => {
-          if (!window.confirm("Se eliminaran todos los productos de la tienda que no tengan imagen. Deseas continuar?")) {
+          if (!window.confirm("Se eliminaran todos los productos de la tienda que tengan precio 0.00. Deseas continuar?")) {
             event.preventDefault();
           }
         }}>
-          <input type="hidden" name="intent" value="delete-products-without-image" />
+          <input type="hidden" name="intent" value="delete-products-with-zero-price" />
           <button type="submit" disabled={isSubmitting} className="danger-button">
-            Borrar todos sin imagen
+            Borrar todos 0.00
           </button>
         </Form>
       </div>

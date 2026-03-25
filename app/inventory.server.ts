@@ -85,15 +85,17 @@ type GraphQLResponse<T> = {
   errors?: GraphQLError[];
 };
 
-type ProductsWithoutImagesPage = {
+type ProductsWithZeroPricePage = {
   products: {
     edges: Array<{
       cursor: string;
       node: {
         id: string;
-        featuredImage: {
-          url: string;
-        } | null;
+        variants: {
+          nodes: Array<{
+            price: string | null;
+          }>;
+        };
       };
     }>;
     pageInfo: {
@@ -252,23 +254,25 @@ async function fetchLocations(admin: AdminClient) {
   }
 }
 
-export async function fetchAllProductIdsWithoutImages(admin: AdminClient) {
+export async function fetchAllProductIdsWithZeroPrice(admin: AdminClient) {
   const productIds: string[] = [];
   let cursor: string | null = null;
   let hasNextPage = true;
 
   while (hasNextPage) {
-    const data: ProductsWithoutImagesPage = await executeGraphQL<ProductsWithoutImagesPage>(
+    const data: ProductsWithZeroPricePage = await executeGraphQL<ProductsWithZeroPricePage>(
       admin,
       `#graphql
-        query ProductsWithoutImagesPage($cursor: String) {
+        query ProductsWithZeroPricePage($cursor: String) {
           products(first: 100, after: $cursor, sortKey: ID) {
             edges {
               cursor
               node {
                 id
-                featuredImage {
-                  url
+                variants(first: 20) {
+                  nodes {
+                    price
+                  }
                 }
               }
             }
@@ -284,7 +288,12 @@ export async function fetchAllProductIdsWithoutImages(admin: AdminClient) {
     );
 
     for (const edge of data.products.edges) {
-      if (!edge.node.featuredImage?.url) {
+      const hasZeroPrice = edge.node.variants.nodes.some((variant) => {
+        const price = Number(variant.price ?? "0");
+        return Number.isFinite(price) && price === 0;
+      });
+
+      if (hasZeroPrice) {
         productIds.push(edge.node.id);
       }
     }
