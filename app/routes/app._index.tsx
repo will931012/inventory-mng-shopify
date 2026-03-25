@@ -135,6 +135,21 @@ export async function action({ request }: ActionFunctionArgs) {
       return json<ActionData>({ ok: true, message: `${productIds.length} producto(s) eliminados correctamente.` });
     }
 
+    if (intent === "delete-products-without-image") {
+      const dashboard = await fetchInventoryDashboard(admin, query, locationId);
+      const productIds = dashboard.products.filter((product) => !product.imageUrl).map((product) => product.id);
+
+      await deleteProducts(admin, productIds);
+
+      return json<ActionData>({
+        ok: true,
+        message:
+          productIds.length === 0
+            ? "No habia productos sin imagen para eliminar."
+            : `${productIds.length} producto(s) sin imagen eliminados correctamente.`
+      });
+    }
+
     if (intent === "update-inventory") {
       await updateVariantInventory(
         admin,
@@ -312,6 +327,7 @@ export default function AppDashboard() {
           shopDomain={data.shop?.myshopifyDomain}
           currencyCode={data.shop?.currencyCode ?? "USD"}
           selectedLocationId={data.selectedLocationId}
+          query={data.query}
           products={data.products}
           isSubmitting={isSubmitting}
         />
@@ -380,12 +396,14 @@ function CatalogPanel({
   shopDomain,
   currencyCode,
   selectedLocationId,
+  query,
   products,
   isSubmitting
 }: {
   shopDomain?: string;
   currencyCode: string;
   selectedLocationId: string;
+  query: string;
   products: Awaited<ReturnType<typeof fetchInventoryDashboard>>["products"];
   isSubmitting: boolean;
 }) {
@@ -396,6 +414,18 @@ function CatalogPanel({
           <h2 className="excel-title" style={{ marginBottom: 0 }}>Catalogo e inventario</h2>
           <p className="excel-subtle" style={{ marginBottom: 0 }}>Acciones por producto: abrir, editar rapido, ajustar cantidad y borrar.</p>
         </div>
+        <Form method="post" onSubmit={(event) => {
+          if (!window.confirm("Se eliminaran todos los productos cargados en esta vista que no tengan imagen. Deseas continuar?")) {
+            event.preventDefault();
+          }
+        }}>
+          <input type="hidden" name="intent" value="delete-products-without-image" />
+          <input type="hidden" name="locationId" value={selectedLocationId} />
+          <input type="hidden" name="query" value={query} />
+          <button type="submit" disabled={isSubmitting || products.length === 0} className="danger-button">
+            Borrar sin imagen
+          </button>
+        </Form>
       </div>
       <Form method="post">
         <input type="hidden" name="intent" value="delete-products" />
