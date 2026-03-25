@@ -937,35 +937,75 @@ export async function deleteProducts(admin: AdminClient, productIds: string[]) {
     throw new Error("Select at least one product to delete.");
   }
 
+  const skippedMissing: string[] = [];
+  const failures: string[] = [];
+
   for (const productId of productIds) {
-    const data = await executeGraphQL<{
-      productDelete: {
-        deletedProductId: string | null;
-        userErrors: UserError[];
-      };
-    }>(
-      admin,
-      `#graphql
-        mutation DeleteProduct($productId: ID!) {
-          productDelete(input: { id: $productId }) {
-            deletedProductId
-            userErrors {
-              field
-              message
+    try {
+      const data = await executeGraphQL<{
+        productDelete: {
+          deletedProductId: string | null;
+          userErrors: UserError[];
+        };
+      }>(
+        admin,
+        `#graphql
+          mutation DeleteProduct($productId: ID!) {
+            productDelete(input: { id: $productId }) {
+              deletedProductId
+              userErrors {
+                field
+                message
+              }
             }
           }
+        `,
+        {
+          productId
         }
-      `,
-      {
-        productId
-      }
-    );
+      );
 
-    const errors = mapUserErrors(data.productDelete.userErrors);
-    if (errors.length) {
-      throw new Error(errors.join("; "));
+      const errors = mapUserErrors(data.productDelete.userErrors);
+      const missingError = errors.find((message) => message.toLowerCase().includes("product does not exist"));
+
+      if (missingError) {
+        skippedMissing.push(productId);
+        continue;
+      }
+
+      if (errors.length) {
+        failures.push(`${productId}: ${errors.join("; ")}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown delete error";
+      if (message.toLowerCase().includes("product does not exist")) {
+        skippedMissing.push(productId);
+        continue;
+      }
+
+      failures.push(`${productId}: ${message}`);
     }
   }
+
+  if (failures.length) {
+    throw new Error(failures.join("; "));
+  }
+
+  if (skippedMissing.length === productIds.length) {
+    throw new Error("Los productos seleccionados ya no existen en Shopify.");
+  }
+
+  if (skippedMissing.length > 0) {
+    return {
+      deletedCount: productIds.length - skippedMissing.length,
+      skippedMissingCount: skippedMissing.length
+    };
+  }
+
+  return {
+    deletedCount: productIds.length,
+    skippedMissingCount: 0
+  };
 }
 
 export async function importProductsFromCsv(

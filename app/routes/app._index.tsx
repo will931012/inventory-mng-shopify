@@ -132,21 +132,29 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (intent === "delete-products") {
       const productIds = formData.getAll("productIds").map(String);
-      await deleteProducts(admin, productIds);
-      return json<ActionData>({ ok: true, message: `${productIds.length} producto(s) eliminados correctamente.` });
+      const result = await deleteProducts(admin, productIds);
+      return json<ActionData>({
+        ok: true,
+        message:
+          result.skippedMissingCount > 0
+            ? `${result.deletedCount} producto(s) eliminados. ${result.skippedMissingCount} ya no existian en Shopify.`
+            : `${result.deletedCount} producto(s) eliminados correctamente.`
+      });
     }
 
     if (intent === "delete-products-without-image") {
       const productIds = await fetchAllProductIdsWithoutImages(admin);
 
-      await deleteProducts(admin, productIds);
+      const result = await deleteProducts(admin, productIds);
 
       return json<ActionData>({
         ok: true,
         message:
           productIds.length === 0
             ? "No habia productos sin imagen para eliminar."
-            : `${productIds.length} producto(s) sin imagen eliminados correctamente.`
+            : result.skippedMissingCount > 0
+              ? `${result.deletedCount} producto(s) sin imagen eliminados. ${result.skippedMissingCount} ya no existian en Shopify.`
+              : `${result.deletedCount} producto(s) sin imagen eliminados correctamente.`
       });
     }
 
