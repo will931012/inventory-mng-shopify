@@ -1,3 +1,19 @@
+import type { LoaderFunctionArgs } from "@remix-run/node";
+import { redirect } from "@remix-run/node";
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  const url = new URL(request.url);
+  const hasShopifyContext =
+    url.searchParams.has("shop") || url.searchParams.has("host") || url.searchParams.has("embedded");
+
+  if (hasShopifyContext) {
+    const query = url.searchParams.toString();
+    throw redirect(query ? `/app?${query}` : "/app");
+  }
+
+  return null;
+}
+
 export default function Index() {
   return (
     <main
