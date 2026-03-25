@@ -148,31 +148,42 @@ export async function action({ request }: ActionFunctionArgs) {
         .filter((product) => product.variants.some((variant) => Number(variant.price ?? "0") === 0))
         .map((product) => product.id);
 
+      if (productIds.length === 0) {
+        return json<ActionData>({
+          ok: true,
+          message: "No habia productos con precio 0.00 en esta vista para eliminar."
+        });
+      }
+
       const result = await deleteProducts(admin, productIds);
 
       return json<ActionData>({
         ok: true,
         message:
-          productIds.length === 0
-            ? "No habia productos con precio 0.00 en esta vista para eliminar."
-            : result.skippedMissingCount > 0
-              ? `${result.deletedCount} producto(s) con precio 0.00 eliminados en esta vista. ${result.skippedMissingCount} ya no existian en Shopify.`
-              : `${result.deletedCount} producto(s) con precio 0.00 eliminados correctamente en esta vista.`
+          result.skippedMissingCount > 0
+            ? `${result.deletedCount} producto(s) con precio 0.00 eliminados en esta vista. ${result.skippedMissingCount} ya no existian en Shopify.`
+            : `${result.deletedCount} producto(s) con precio 0.00 eliminados correctamente en esta vista.`
       });
     }
 
     if (intent === "delete-all-products-with-zero-price") {
       const productIds = await fetchAllProductIdsWithZeroPrice(admin);
+
+      if (productIds.length === 0) {
+        return json<ActionData>({
+          ok: true,
+          message: "No habia productos con precio 0.00 para eliminar en toda la tienda."
+        });
+      }
+
       const result = await deleteProducts(admin, productIds);
 
       return json<ActionData>({
         ok: true,
         message:
-          productIds.length === 0
-            ? "No habia productos con precio 0.00 para eliminar en toda la tienda."
-            : result.skippedMissingCount > 0
-              ? `${result.deletedCount} producto(s) con precio 0.00 eliminados en toda la tienda. ${result.skippedMissingCount} ya no existian en Shopify.`
-              : `${result.deletedCount} producto(s) con precio 0.00 eliminados correctamente en toda la tienda.`
+          result.skippedMissingCount > 0
+            ? `${result.deletedCount} producto(s) con precio 0.00 eliminados en toda la tienda. ${result.skippedMissingCount} ya no existian en Shopify.`
+            : `${result.deletedCount} producto(s) con precio 0.00 eliminados correctamente en toda la tienda.`
       });
     }
 
