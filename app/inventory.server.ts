@@ -882,7 +882,7 @@ export async function deleteProducts(admin: AdminClient, productIds: string[]) {
       admin,
       `#graphql
         mutation DeleteProduct($productId: ID!) {
-          productDelete(productId: $productId) {
+          productDelete(input: { id: $productId }) {
             deletedProductId
             userErrors {
               field
