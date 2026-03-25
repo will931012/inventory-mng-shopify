@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { NavLink, Outlet, useLoaderData } from "@remix-run/react";
+import { NavLink, Outlet, useLoaderData, useLocation } from "@remix-run/react";
 import type { CSSProperties } from "react";
 
 import { authenticate } from "../shopify.server";
@@ -39,6 +39,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export default function AppLayout() {
   const { apiKey, shop } = useLoaderData<typeof loader>();
+  const location = useLocation();
+  const currentParams = new URLSearchParams(location.search);
 
   return (
     <>
@@ -63,15 +65,21 @@ export default function AppLayout() {
 
           <nav style={{ marginTop: "0.75rem", display: "grid", gap: "0.35rem" }}>
             {sections.map((section) => (
+              (() => {
+                const params = new URLSearchParams(currentParams);
+                params.set("view", section.label.toLowerCase());
+                const to = `/app?${params.toString()}`;
+
+                return (
               <NavLink
                 key={section.label}
-                to={section.to}
+                to={to}
                 prefetch="intent"
                 style={({ isActive }) => ({
                   ...navLinkStyle,
-                  background: isActive ? "rgba(255,255,255,0.12)" : "transparent",
-                  borderColor: isActive ? section.accent : "rgba(148,163,184,0.15)",
-                  color: isActive ? "#f8fafc" : "rgba(226,232,240,0.82)"
+                  background: isActive ? "#f3f4f6" : "#ffffff",
+                  borderColor: isActive ? section.accent : "#d1d5db",
+                  color: "#111827"
                 })}
               >
                 <span
@@ -85,6 +93,8 @@ export default function AppLayout() {
                 />
                 <span>{section.label}</span>
               </NavLink>
+                );
+              })()
             ))}
           </nav>
 
