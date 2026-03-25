@@ -1,6 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
+import { Form, Link, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 import type { CSSProperties } from "react";
 
 import {
@@ -25,6 +25,13 @@ type ActionData =
       message: string;
       errors?: string[];
     };
+
+const tabs = [
+  { id: "overview", label: "Overview", tone: "#f59e0b" },
+  { id: "catalog", label: "Catalog", tone: "#0ea5e9" },
+  { id: "imports", label: "Imports", tone: "#22c55e" },
+  { id: "operations", label: "Operations", tone: "#f97316" }
+] as const;
 
 function getStatusTone(status: string) {
   switch (status) {
@@ -51,12 +58,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const query = url.searchParams.get("q") ?? "";
   const locationId = url.searchParams.get("locationId");
+  const view = url.searchParams.get("view") ?? "overview";
   const dashboard = await fetchInventoryDashboard(admin, query, locationId);
 
   return json({
     ...dashboard,
     query,
-    csvTemplate: csvTemplate()
+    csvTemplate: csvTemplate(),
+    view
   });
 }
 
@@ -167,113 +176,159 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function AppDashboard() {
-  const { shop, locations, selectedLocationId, products, summary, query, csvTemplate, loadWarning } =
-    useLoaderData<typeof loader>();
+  const {
+    shop,
+    locations,
+    selectedLocationId,
+    products,
+    summary,
+    query,
+    csvTemplate,
+    loadWarning,
+    view
+  } = useLoaderData<typeof loader>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
+  const activeView = tabs.some((tab) => tab.id === view) ? view : "overview";
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background:
-          "radial-gradient(circle at top left, rgba(251,191,36,0.22), transparent 25%), linear-gradient(180deg, #fff7ed, #f8fafc 42%, #e2e8f0)",
-        padding: "2rem",
-        color: "#0f172a"
-      }}
-    >
-      <div style={{ maxWidth: "88rem", margin: "0 auto" }}>
-        <section
+    <main style={{ color: "#0f172a" }}>
+      <section
+        style={{
+          background: "linear-gradient(135deg, rgba(15,23,42,0.96), rgba(30,41,59,0.96))",
+          color: "#f8fafc",
+          borderRadius: "1.6rem",
+          padding: "1.6rem",
+          boxShadow: "0 28px 60px rgba(15, 23, 42, 0.18)"
+        }}
+      >
+        <p style={{ margin: 0, color: "#f59e0b", fontWeight: 800, letterSpacing: "0.08em" }}>
+          INVENTORY MANAGEMENT
+        </p>
+        <div
           style={{
-            background: "rgba(15, 23, 42, 0.92)",
-            color: "#f8fafc",
-            borderRadius: "1.5rem",
-            padding: "1.75rem",
-            boxShadow: "0 24px 60px rgba(15, 23, 42, 0.22)"
+            marginTop: "0.9rem",
+            display: "flex",
+            justifyContent: "space-between",
+            gap: "1rem",
+            flexWrap: "wrap"
           }}
         >
-          <p style={{ margin: 0, color: "#f59e0b", fontWeight: 700, letterSpacing: "0.08em" }}>
-            INVENTORY MANAGEMENT
-          </p>
+          <div>
+            <h1 style={{ margin: 0, fontSize: "2.2rem", lineHeight: 1.05 }}>
+              Gestion centralizada de tu catalogo Shopify
+            </h1>
+            <p style={{ marginBottom: 0, color: "rgba(248,250,252,0.78)", maxWidth: "48rem" }}>
+              Navega por vistas, importa y exporta inventario, crea productos y ejecuta operaciones
+              masivas desde una sola app.
+            </p>
+          </div>
           <div
             style={{
-              marginTop: "0.75rem",
-              display: "flex",
-              justifyContent: "space-between",
-              gap: "1rem",
-              flexWrap: "wrap"
+              minWidth: "18rem",
+              background: "rgba(255,255,255,0.08)",
+              borderRadius: "1rem",
+              padding: "1rem"
             }}
           >
-            <div>
-              <h1 style={{ margin: 0, fontSize: "2.4rem", lineHeight: 1.05 }}>
-                Control total de catalogo e inventario
-              </h1>
-              <p style={{ marginBottom: 0, color: "rgba(248,250,252,0.78)", maxWidth: "48rem" }}>
-                Crea productos, importa lotes por CSV, exporta tu inventario y elimina catalogo
-                directamente desde Shopify.
-              </p>
-            </div>
-            <div
-              style={{
-                minWidth: "18rem",
-                background: "rgba(255,255,255,0.08)",
-                borderRadius: "1rem",
-                padding: "1rem"
-              }}
-            >
-              <p style={{ margin: 0, fontSize: "0.85rem", color: "rgba(248,250,252,0.6)" }}>
-                Tienda conectada
-              </p>
-              <strong style={{ display: "block", marginTop: "0.3rem", fontSize: "1.05rem" }}>
-                {shop?.name ?? "Tienda Shopify"}
-              </strong>
-              <span style={{ color: "rgba(248,250,252,0.75)" }}>
-                {shop?.myshopifyDomain ?? "Dominio no disponible"}
-              </span>
-            </div>
+            <p style={{ margin: 0, fontSize: "0.85rem", color: "rgba(248,250,252,0.6)" }}>
+              Tienda conectada
+            </p>
+            <strong style={{ display: "block", marginTop: "0.35rem", fontSize: "1.05rem" }}>
+              {shop?.name ?? "Tienda Shopify"}
+            </strong>
+            <span style={{ color: "rgba(248,250,252,0.75)" }}>
+              {shop?.myshopifyDomain ?? "Dominio no disponible"}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      {actionData ? (
+        <section
+          style={{
+            marginTop: "1rem",
+            background: actionData.ok ? "#dcfce7" : "#fee2e2",
+            color: actionData.ok ? "#166534" : "#991b1b",
+            borderRadius: "1rem",
+            padding: "1rem 1.2rem"
+          }}
+        >
+          <strong>{actionData.message}</strong>
+          {actionData.errors?.length ? (
+            <ul style={{ marginBottom: 0, marginTop: "0.75rem", paddingLeft: "1.25rem" }}>
+              {actionData.errors.map((error) => (
+                <li key={error}>{error}</li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
+
+      {loadWarning ? (
+        <section
+          style={{
+            marginTop: "1rem",
+            background: "#fef3c7",
+            color: "#92400e",
+            borderRadius: "1rem",
+            padding: "1rem 1.2rem"
+          }}
+        >
+          <strong>{loadWarning}</strong>
+          <div style={{ marginTop: "0.4rem" }}>
+            Reautoriza la app si aun no aceptaste `read_locations`, o seguimos funcionando en modo
+            compatible mientras tanto.
           </div>
         </section>
+      ) : null}
 
-        {actionData ? (
-          <section
-            style={{
-              marginTop: "1rem",
-              background: actionData.ok ? "#dcfce7" : "#fee2e2",
-              color: actionData.ok ? "#166534" : "#991b1b",
-              borderRadius: "1rem",
-              padding: "1rem 1.2rem"
-            }}
-          >
-            <strong>{actionData.message}</strong>
-            {actionData.errors?.length ? (
-              <ul style={{ marginBottom: 0, marginTop: "0.75rem", paddingLeft: "1.25rem" }}>
-                {actionData.errors.map((error) => (
-                  <li key={error}>{error}</li>
-                ))}
-              </ul>
-            ) : null}
-          </section>
-        ) : null}
+      <section style={{ marginTop: "1rem", display: "flex", gap: "0.8rem", flexWrap: "wrap" }}>
+        {tabs.map((tab) => {
+          const isActive = activeView === tab.id;
+          const baseParams = new URLSearchParams();
+          baseParams.set("view", tab.id);
+          if (selectedLocationId) {
+            baseParams.set("locationId", selectedLocationId);
+          }
+          if (query) {
+            baseParams.set("q", query);
+          }
 
-        {loadWarning ? (
-          <section
-            style={{
-              marginTop: "1rem",
-              background: "#fef3c7",
-              color: "#92400e",
-              borderRadius: "1rem",
-              padding: "1rem 1.2rem"
-            }}
-          >
-            <strong>{loadWarning}</strong>
-            <div style={{ marginTop: "0.4rem" }}>
-              Reautoriza la app si aun no aceptaste `read_locations`, o seguimos funcionando en modo
-              compatible mientras tanto.
-            </div>
-          </section>
-        ) : null}
+          return (
+            <Link
+              key={tab.id}
+              to={`/app?${baseParams.toString()}`}
+              prefetch="intent"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.65rem",
+                padding: "0.85rem 1rem",
+                borderRadius: "999px",
+                textDecoration: "none",
+                fontWeight: 700,
+                border: `1px solid ${isActive ? tab.tone : "#cbd5e1"}`,
+                color: isActive ? "#0f172a" : "#475569",
+                background: isActive ? `${tab.tone}22` : "#ffffff"
+              }}
+            >
+              <span
+                style={{
+                  width: "0.65rem",
+                  height: "0.65rem",
+                  borderRadius: "999px",
+                  background: tab.tone
+                }}
+              />
+              {tab.label}
+            </Link>
+          );
+        })}
+      </section>
 
+      {activeView === "overview" ? (
         <section
           style={{
             marginTop: "1rem",
@@ -302,7 +357,9 @@ export default function AppDashboard() {
             </article>
           ))}
         </section>
+      ) : null}
 
+      {(activeView === "overview" || activeView === "catalog") ? (
         <section
           style={{
             marginTop: "1rem",
@@ -311,14 +368,7 @@ export default function AppDashboard() {
             gap: "1rem"
           }}
         >
-          <article
-            style={{
-              background: "#ffffff",
-              borderRadius: "1.25rem",
-              padding: "1.5rem",
-              boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)"
-            }}
-          >
+          <article style={panelStyle}>
             <div
               style={{
                 display: "flex",
@@ -338,68 +388,31 @@ export default function AppDashboard() {
                 <input type="hidden" name="intent" value="export" />
                 <input type="hidden" name="query" value={query} />
                 <input type="hidden" name="locationId" value={selectedLocationId} />
-                <button
-                  type="submit"
-                  style={{
-                    border: 0,
-                    borderRadius: "0.9rem",
-                    background: "#0f172a",
-                    color: "#ffffff",
-                    padding: "0.85rem 1rem",
-                    fontWeight: 700,
-                    cursor: "pointer"
-                  }}
-                >
+                <button type="submit" style={actionButtonStyle}>
                   Exportar CSV
                 </button>
               </Form>
             </div>
 
             <Form method="get" style={{ marginTop: "1rem", display: "grid", gap: "0.8rem" }}>
+              <input type="hidden" name="view" value={activeView} />
               <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: "0.8rem" }}>
                 <input
                   type="text"
                   name="q"
                   defaultValue={query}
                   placeholder="Ej. perfume, SKU-001, vendor:Grace"
-                  style={{
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "0.85rem",
-                    padding: "0.85rem 1rem",
-                    fontSize: "1rem"
-                  }}
+                  style={inputStyle}
                 />
-                <select
-                  name="locationId"
-                  defaultValue={selectedLocationId}
-                  style={{
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "0.85rem",
-                    padding: "0.85rem 1rem",
-                    fontSize: "1rem"
-                  }}
-                >
-                  {locations.length === 0 ? (
-                    <option value="">Sin ubicacion</option>
-                  ) : null}
+                <select name="locationId" defaultValue={selectedLocationId} style={inputStyle}>
+                  {locations.length === 0 ? <option value="">Sin ubicacion</option> : null}
                   {locations.map((location) => (
                     <option key={location.id} value={location.id}>
                       {location.name}
                     </option>
                   ))}
                 </select>
-                <button
-                  type="submit"
-                  style={{
-                    border: 0,
-                    borderRadius: "0.85rem",
-                    background: "#f59e0b",
-                    color: "#111827",
-                    padding: "0.85rem 1rem",
-                    fontWeight: 700,
-                    cursor: "pointer"
-                  }}
-                >
+                <button type="submit" style={highlightButtonStyle}>
                   Buscar
                 </button>
               </div>
@@ -408,10 +421,8 @@ export default function AppDashboard() {
 
           <article
             style={{
-              background: "#fff7ed",
-              borderRadius: "1.25rem",
-              padding: "1.5rem",
-              boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)"
+              ...panelStyle,
+              background: "#fff7ed"
             }}
           >
             <h2 style={{ marginTop: 0, marginBottom: "0.5rem" }}>Plantilla CSV</h2>
@@ -433,7 +444,9 @@ export default function AppDashboard() {
             </pre>
           </article>
         </section>
+      ) : null}
 
+      {(activeView === "overview" || activeView === "imports") ? (
         <section
           style={{
             marginTop: "1rem",
@@ -442,14 +455,7 @@ export default function AppDashboard() {
             gap: "1rem"
           }}
         >
-          <article
-            style={{
-              background: "#ffffff",
-              borderRadius: "1.25rem",
-              padding: "1.5rem",
-              boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)"
-            }}
-          >
+          <article style={panelStyle}>
             <h2 style={{ marginTop: 0 }}>Crear producto</h2>
             <Form method="post" style={{ display: "grid", gap: "0.8rem" }}>
               <input type="hidden" name="intent" value="create-product" />
@@ -460,14 +466,7 @@ export default function AppDashboard() {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.8rem" }}>
                 <input name="price" type="number" step="0.01" min="0" placeholder="Precio" style={inputStyle} />
-                <input
-                  name="quantity"
-                  type="number"
-                  step="1"
-                  placeholder="Cantidad"
-                  defaultValue={0}
-                  style={inputStyle}
-                />
+                <input name="quantity" type="number" step="1" placeholder="Cantidad" defaultValue={0} style={inputStyle} />
                 <select name="status" defaultValue="ACTIVE" style={inputStyle}>
                   <option value="ACTIVE">Activo</option>
                   <option value="DRAFT">Borrador</option>
@@ -480,20 +479,13 @@ export default function AppDashboard() {
               </div>
               <input name="barcode" placeholder="Barcode" style={inputStyle} />
               <input name="tags" placeholder="Tags separadas por coma" style={inputStyle} />
-              <button type="submit" disabled={isSubmitting} style={primaryButtonStyle}>
+              <button type="submit" disabled={isSubmitting} style={actionButtonStyle}>
                 {isSubmitting ? "Guardando..." : "Crear producto"}
               </button>
             </Form>
           </article>
 
-          <article
-            style={{
-              background: "#ffffff",
-              borderRadius: "1.25rem",
-              padding: "1.5rem",
-              boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)"
-            }}
-          >
+          <article style={panelStyle}>
             <h2 style={{ marginTop: 0 }}>Importar CSV</h2>
             <p style={{ color: "#64748b" }}>
               Si el SKU ya existe, la app actualiza el producto y la cantidad. Si no existe, lo crea.
@@ -512,22 +504,16 @@ export default function AppDashboard() {
                   background: "#f8fafc"
                 }}
               />
-              <button type="submit" disabled={isSubmitting} style={secondaryButtonStyle}>
+              <button type="submit" disabled={isSubmitting} style={highlightButtonStyle}>
                 {isSubmitting ? "Importando..." : "Importar inventario"}
               </button>
             </Form>
           </article>
         </section>
+      ) : null}
 
-        <section
-          style={{
-            marginTop: "1rem",
-            background: "#ffffff",
-            borderRadius: "1.25rem",
-            padding: "1.5rem",
-            boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)"
-          }}
-        >
+      {(activeView === "overview" || activeView === "operations" || activeView === "catalog") ? (
+        <section style={{ ...panelStyle, marginTop: "1rem" }}>
           <div
             style={{
               display: "flex",
@@ -652,11 +638,7 @@ export default function AppDashboard() {
                               <Form method="post" style={{ display: "flex", gap: "0.6rem", alignItems: "center" }}>
                                 <input type="hidden" name="intent" value="update-inventory" />
                                 <input type="hidden" name="locationId" value={selectedLocationId} />
-                                <input
-                                  type="hidden"
-                                  name="inventoryItemId"
-                                  value={primaryVariant.inventoryItemId}
-                                />
+                                <input type="hidden" name="inventoryItemId" value={primaryVariant.inventoryItemId} />
                                 <input
                                   type="number"
                                   name="quantity"
@@ -699,10 +681,17 @@ export default function AppDashboard() {
             </div>
           </Form>
         </section>
-      </div>
+      ) : null}
     </main>
   );
 }
+
+const panelStyle: CSSProperties = {
+  background: "#ffffff",
+  borderRadius: "1.25rem",
+  padding: "1.5rem",
+  boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)"
+};
 
 const inputStyle: CSSProperties = {
   border: "1px solid #cbd5e1",
@@ -712,7 +701,7 @@ const inputStyle: CSSProperties = {
   width: "100%"
 };
 
-const primaryButtonStyle: CSSProperties = {
+const actionButtonStyle: CSSProperties = {
   border: 0,
   borderRadius: "0.9rem",
   background: "#0f172a",
@@ -722,7 +711,7 @@ const primaryButtonStyle: CSSProperties = {
   cursor: "pointer"
 };
 
-const secondaryButtonStyle: CSSProperties = {
+const highlightButtonStyle: CSSProperties = {
   border: 0,
   borderRadius: "0.9rem",
   background: "#f59e0b",
