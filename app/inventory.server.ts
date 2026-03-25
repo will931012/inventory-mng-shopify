@@ -60,6 +60,7 @@ export type InventoryDashboardData = {
   locations: LocationSummary[];
   selectedLocationId: string;
   products: InventoryProduct[];
+  loadWarning?: string;
   summary: {
     productCount: number;
     variantCount: number;
@@ -245,95 +246,97 @@ export async function fetchInventoryDashboard(
       ? preferredLocationId
       : locations[0]?.id ?? "";
 
-  const data = await executeGraphQL<{
-    shop: ShopSummary;
-    products: {
-      nodes: Array<{
-        id: string;
-        title: string;
-        handle: string;
-        status: string;
-        vendor: string | null;
-        productType: string | null;
-        tags: string[];
-        totalInventory: number | null;
-        updatedAt: string;
-        featuredImage: {
-          url: string;
-          altText: string | null;
-        } | null;
-        variants: {
-          nodes: Array<{
-            id: string;
-            title: string;
-            barcode: string | null;
-            price: string | null;
-            inventoryQuantity: number | null;
-            inventoryItem: {
+  try {
+    const data = await executeGraphQL<{
+      shop: ShopSummary;
+      products: {
+        nodes: Array<{
+          id: string;
+          title: string;
+          handle: string;
+          status: string;
+          vendor: string | null;
+          productType: string | null;
+          tags: string[];
+          totalInventory: number | null;
+          updatedAt: string;
+          featuredImage: {
+            url: string;
+            altText: string | null;
+          } | null;
+          variants: {
+            nodes: Array<{
               id: string;
-              sku: string | null;
-              tracked: boolean | null;
-              inventoryLevels: {
-                nodes: Array<{
-                  location: {
-                    id: string;
-                    name: string;
-                  };
-                  quantities: Array<{
-                    name: string;
-                    quantity: number;
+              title: string;
+              barcode: string | null;
+              price: string | null;
+              inventoryQuantity: number | null;
+              inventoryItem: {
+                id: string;
+                sku: string | null;
+                tracked: boolean | null;
+                inventoryLevels: {
+                  nodes: Array<{
+                    location: {
+                      id: string;
+                      name: string;
+                    };
+                    quantities: Array<{
+                      name: string;
+                      quantity: number;
+                    }>;
                   }>;
-                }>;
+                };
               };
-            };
-          }>;
-        };
-      }>;
-    };
-  }>(
-    admin,
-    `#graphql
-      query InventoryDashboard($query: String!) {
-        shop {
-          name
-          myshopifyDomain
-          currencyCode
-        }
-        products(first: 40, sortKey: UPDATED_AT, reverse: true, query: $query) {
-          nodes {
-            id
-            title
-            handle
-            status
-            vendor
-            productType
-            tags
-            totalInventory
-            updatedAt
-            featuredImage {
-              url
-              altText
-            }
-            variants(first: 20) {
-              nodes {
-                id
-                title
-                barcode
-                price
-                inventoryQuantity
-                inventoryItem {
+            }>;
+          };
+        }>;
+      };
+    }>(
+      admin,
+      `#graphql
+        query InventoryDashboard($query: String!) {
+          shop {
+            name
+            myshopifyDomain
+            currencyCode
+          }
+          products(first: 40, sortKey: UPDATED_AT, reverse: true, query: $query) {
+            nodes {
+              id
+              title
+              handle
+              status
+              vendor
+              productType
+              tags
+              totalInventory
+              updatedAt
+              featuredImage {
+                url
+                altText
+              }
+              variants(first: 20) {
+                nodes {
                   id
-                  sku
-                  tracked
-                  inventoryLevels(first: 20) {
-                    nodes {
-                      location {
-                        id
-                        name
-                      }
-                      quantities(names: ["available"]) {
-                        name
-                        quantity
+                  title
+                  barcode
+                  price
+                  inventoryQuantity
+                  inventoryItem {
+                    id
+                    sku
+                    tracked
+                    inventoryLevels(first: 20) {
+                      nodes {
+                        location {
+                          id
+                          name
+                        }
+                        quantities(names: ["available"]) {
+                          name
+                          quantity
+                        }
                       }
                     }
                   }
@@ -342,53 +345,174 @@ export async function fetchInventoryDashboard(
             }
           }
         }
+      `,
+      {
+        query: searchQuery.trim()
       }
-    `,
-    {
-      query: searchQuery.trim()
-    }
-  );
+    );
 
-  const products = data.products.nodes.map<InventoryProduct>((product) => ({
-    id: product.id,
-    title: product.title,
-    handle: product.handle,
-    status: product.status,
-    vendor: product.vendor ?? "",
-    productType: product.productType ?? "",
-    tags: product.tags ?? [],
-    totalInventory: product.totalInventory ?? 0,
-    updatedAt: product.updatedAt,
-    imageUrl: product.featuredImage?.url ?? null,
-    imageAlt: product.featuredImage?.altText ?? null,
-    variants: product.variants.nodes.map((variant) => ({
-      id: variant.id,
-      title: variant.title,
-      sku: variant.inventoryItem?.sku ?? "",
-      barcode: variant.barcode ?? "",
-      price: variant.price ?? "0.00",
-      inventoryQuantity: variant.inventoryQuantity ?? 0,
-      inventoryItemId: variant.inventoryItem.id,
-      tracked: Boolean(variant.inventoryItem.tracked),
-      inventoryLevels: variant.inventoryItem.inventoryLevels.nodes.map((level) => ({
-        locationId: level.location.id,
-        locationName: level.location.name,
-        available: level.quantities.find((quantity) => quantity.name === "available")?.quantity ?? 0
+    const products = data.products.nodes.map<InventoryProduct>((product) => ({
+      id: product.id,
+      title: product.title,
+      handle: product.handle,
+      status: product.status,
+      vendor: product.vendor ?? "",
+      productType: product.productType ?? "",
+      tags: product.tags ?? [],
+      totalInventory: product.totalInventory ?? 0,
+      updatedAt: product.updatedAt,
+      imageUrl: product.featuredImage?.url ?? null,
+      imageAlt: product.featuredImage?.altText ?? null,
+      variants: product.variants.nodes.map((variant) => ({
+        id: variant.id,
+        title: variant.title,
+        sku: variant.inventoryItem?.sku ?? "",
+        barcode: variant.barcode ?? "",
+        price: variant.price ?? "0.00",
+        inventoryQuantity: variant.inventoryQuantity ?? 0,
+        inventoryItemId: variant.inventoryItem.id,
+        tracked: Boolean(variant.inventoryItem.tracked),
+        inventoryLevels: variant.inventoryItem.inventoryLevels.nodes.map((level) => ({
+          locationId: level.location.id,
+          locationName: level.location.name,
+          available: level.quantities.find((quantity) => quantity.name === "available")?.quantity ?? 0
+        }))
       }))
-    }))
-  }));
+    }));
 
-  return {
-    shop: data.shop,
-    locations,
-    selectedLocationId,
-    products,
-    summary: {
-      productCount: products.length,
-      variantCount: products.reduce((total, product) => total + product.variants.length, 0),
-      inventoryUnits: products.reduce((total, product) => total + product.totalInventory, 0)
-    }
-  };
+    return {
+      shop: data.shop,
+      locations,
+      selectedLocationId,
+      products,
+      summary: {
+        productCount: products.length,
+        variantCount: products.reduce((total, product) => total + product.variants.length, 0),
+        inventoryUnits: products.reduce((total, product) => total + product.totalInventory, 0)
+      }
+    };
+  } catch (error) {
+    const fallback = await executeGraphQL<{
+      shop: ShopSummary;
+      products: {
+        nodes: Array<{
+          id: string;
+          title: string;
+          handle: string;
+          status: string;
+          vendor: string | null;
+          productType: string | null;
+          tags: string[];
+          totalInventory: number | null;
+          updatedAt: string;
+          featuredImage: {
+            url: string;
+            altText: string | null;
+          } | null;
+          variants: {
+            nodes: Array<{
+              id: string;
+              title: string;
+              barcode: string | null;
+              price: string | null;
+              inventoryQuantity: number | null;
+              inventoryItem: {
+                id: string;
+                sku: string | null;
+                tracked: boolean | null;
+              };
+            }>;
+          };
+        }>;
+      };
+    }>(
+      admin,
+      `#graphql
+        query InventoryDashboardFallback($query: String!) {
+          shop {
+            name
+            myshopifyDomain
+            currencyCode
+          }
+          products(first: 40, sortKey: UPDATED_AT, reverse: true, query: $query) {
+            nodes {
+              id
+              title
+              handle
+              status
+              vendor
+              productType
+              tags
+              totalInventory
+              updatedAt
+              featuredImage {
+                url
+                altText
+              }
+              variants(first: 20) {
+                nodes {
+                  id
+                  title
+                  barcode
+                  price
+                  inventoryQuantity
+                  inventoryItem {
+                    id
+                    sku
+                    tracked
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      {
+        query: searchQuery.trim()
+      }
+    );
+
+    const products = fallback.products.nodes.map<InventoryProduct>((product) => ({
+      id: product.id,
+      title: product.title,
+      handle: product.handle,
+      status: product.status,
+      vendor: product.vendor ?? "",
+      productType: product.productType ?? "",
+      tags: product.tags ?? [],
+      totalInventory: product.totalInventory ?? 0,
+      updatedAt: product.updatedAt,
+      imageUrl: product.featuredImage?.url ?? null,
+      imageAlt: product.featuredImage?.altText ?? null,
+      variants: product.variants.nodes.map((variant) => ({
+        id: variant.id,
+        title: variant.title,
+        sku: variant.inventoryItem?.sku ?? "",
+        barcode: variant.barcode ?? "",
+        price: variant.price ?? "0.00",
+        inventoryQuantity: variant.inventoryQuantity ?? 0,
+        inventoryItemId: variant.inventoryItem.id,
+        tracked: Boolean(variant.inventoryItem.tracked),
+        inventoryLevels: []
+      }))
+    }));
+
+    return {
+      shop: fallback.shop,
+      locations: [],
+      selectedLocationId: "",
+      products,
+      loadWarning:
+        error instanceof Error
+          ? `Algunas funciones avanzadas de inventario no cargaron: ${error.message}`
+          : "Algunas funciones avanzadas de inventario no cargaron.",
+      summary: {
+        productCount: products.length,
+        variantCount: products.reduce((total, product) => total + product.variants.length, 0),
+        inventoryUnits: products.reduce((total, product) => total + product.totalInventory, 0)
+      }
+    };
+  }
 }
 
 async function updateProductBasics(

@@ -167,7 +167,7 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function AppDashboard() {
-  const { shop, locations, selectedLocationId, products, summary, query, csvTemplate } =
+  const { shop, locations, selectedLocationId, products, summary, query, csvTemplate, loadWarning } =
     useLoaderData<typeof loader>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
@@ -253,6 +253,24 @@ export default function AppDashboard() {
                 ))}
               </ul>
             ) : null}
+          </section>
+        ) : null}
+
+        {loadWarning ? (
+          <section
+            style={{
+              marginTop: "1rem",
+              background: "#fef3c7",
+              color: "#92400e",
+              borderRadius: "1rem",
+              padding: "1rem 1.2rem"
+            }}
+          >
+            <strong>{loadWarning}</strong>
+            <div style={{ marginTop: "0.4rem" }}>
+              Reautoriza la app si aun no aceptaste `read_locations`, o seguimos funcionando en modo
+              compatible mientras tanto.
+            </div>
           </section>
         ) : null}
 
