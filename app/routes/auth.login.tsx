@@ -1,15 +1,14 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
 import { Form, useActionData, useNavigation } from "@remix-run/react";
 
 import { login } from "../shopify.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  return json(await login(request));
+  return login(request);
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  return json(await login(request));
+  return login(request);
 }
 
 export default function AuthLogin() {
@@ -41,7 +40,7 @@ export default function AuthLogin() {
         <p style={{ color: "#475569", lineHeight: 1.6 }}>
           Introduce el dominio de tu tienda para instalar y abrir la app embebida.
         </p>
-        <Form method="post">
+        <Form method="post" reloadDocument target="_top">
           <label htmlFor="shop" style={{ display: "block", fontWeight: 600, marginBottom: "0.5rem" }}>
             Dominio de la tienda
           </label>

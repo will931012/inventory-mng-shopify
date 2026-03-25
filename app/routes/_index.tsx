@@ -1,5 +1,3 @@
-import { Link } from "@remix-run/react";
-
 export default function Index() {
   return (
     <main
@@ -44,9 +42,10 @@ export default function Index() {
           >
             Abrir dashboard
           </a>
-          <Link
-            to="/auth/login"
-            prefetch="intent"
+          <a
+            href="/auth/login"
+            target="_top"
+            rel="noreferrer"
             style={{
               border: "1px solid #cbd5e1",
               color: "#0f172a",
@@ -57,7 +56,7 @@ export default function Index() {
             }}
           >
             Instalar en una tienda
-          </Link>
+          </a>
         </div>
       </section>
     </main>
