@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"export.*function\\\\|export.*const\\\\|type\\\\|interface\" /c/Users/wilia/OneDrive/Desktop/Perfumes/apps/inventoryShopifyManager/app/*.ts --include=\"*.ts\" --include=\"*.tsx\")",
+      "Bash(npm run:*)",
+      "Bash(npm install:*)",
+      "Bash(node -e \"const x = require\\(''xlsx''\\); console.log\\(''xlsx version:'', x.version\\)\")",
+      "Read(//c/Users/wilia/Downloads/**)"
+    ]
+  }
+}

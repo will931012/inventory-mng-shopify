@@ -1,3 +1,5 @@
+import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
+
 type AdminClient = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
 };
@@ -30,6 +32,9 @@ export type InventoryVariant = {
   sku: string;
   barcode: string;
   price: string;
+  compareAtPrice: string;
+  wholesalePrice: string;
+  cost: string;
   inventoryQuantity: number;
   inventoryItemId: string;
   tracked: boolean;
@@ -72,12 +77,43 @@ export type ProductUpsertInput = {
   title: string;
   sku: string;
   price: string;
+  compareAtPrice: string;
+  wholesalePrice: string;
+  cost: string;
   quantity: number;
   barcode: string;
   vendor: string;
   productType: string;
   tags: string[];
   status: "ACTIVE" | "DRAFT" | "ARCHIVED";
+};
+
+export type SupplierColumnMapping = {
+  titleCol: string;
+  skuCol: string;
+  barcodeCol: string;
+  vendorCol: string;
+  productTypeCol: string;
+  tagsCol: string;
+  costCol: string;
+  quantityCol: string;
+  retailPriceCol: string;
+  wholesalePriceCol: string;
+  tagColumns: string[];    // extra columns whose values become tags (e.g. CONCENTRATION, SEX, SIZE)
+  useUpcAsSku: boolean;    // when true, use barcodeCol value as SKU when skuCol is empty
+};
+
+export type SupplierPricingRules = {
+  retailMultiplier: number;
+  wholesaleMultiplier: number;
+  defaultVendor: string;
+  defaultProductType: string;
+  defaultStatus: "ACTIVE" | "DRAFT" | "ARCHIVED";
+};
+
+export type ExcelInfo = {
+  sheets: string[];
+  headers: string[];
 };
 
 type GraphQLResponse<T> = {
@@ -342,13 +378,16 @@ export async function fetchInventoryDashboard(
             nodes: Array<{
               id: string;
               title: string;
+              compareAtPrice: string | null;
               barcode: string | null;
               price: string | null;
               inventoryQuantity: number | null;
+              wholesaleMeta: { value: string } | null;
               inventoryItem: {
                 id: string;
                 sku: string | null;
                 tracked: boolean | null;
+                unitCost: { amount: string } | null;
                 inventoryLevels: {
                   nodes: Array<{
                     location: {
@@ -394,13 +433,20 @@ export async function fetchInventoryDashboard(
                 nodes {
                   id
                   title
+                  compareAtPrice
                   barcode
                   price
                   inventoryQuantity
+                  wholesaleMeta: metafield(namespace: "custom", key: "wholesale_price") {
+                    value
+                  }
                   inventoryItem {
                     id
                     sku
                     tracked
+                    unitCost {
+                      amount
+                    }
                     inventoryLevels(first: 20) {
                       nodes {
                         location {
@@ -443,6 +489,9 @@ export async function fetchInventoryDashboard(
         sku: variant.inventoryItem?.sku ?? "",
         barcode: variant.barcode ?? "",
         price: variant.price ?? "0.00",
+        compareAtPrice: variant.compareAtPrice ?? "",
+        wholesalePrice: variant.wholesaleMeta?.value ?? "",
+        cost: variant.inventoryItem?.unitCost?.amount ?? "",
         inventoryQuantity: variant.inventoryQuantity ?? 0,
         inventoryItemId: variant.inventoryItem.id,
         tracked: Boolean(variant.inventoryItem.tracked),
@@ -564,6 +613,9 @@ export async function fetchInventoryDashboard(
         sku: variant.inventoryItem?.sku ?? "",
         barcode: variant.barcode ?? "",
         price: variant.price ?? "0.00",
+        compareAtPrice: "",
+        wholesalePrice: "",
+        cost: "",
         inventoryQuantity: variant.inventoryQuantity ?? 0,
         inventoryItemId: variant.inventoryItem.id,
         tracked: Boolean(variant.inventoryItem.tracked),
@@ -578,8 +630,8 @@ export async function fetchInventoryDashboard(
       products,
       loadWarning:
         error instanceof Error
-          ? `Algunas funciones avanzadas de inventario no cargaron: ${error.message}`
-          : "Algunas funciones avanzadas de inventario no cargaron.",
+          ? `Some advanced inventory features failed to load: ${error.message}`
+          : "Some advanced inventory features failed to load.",
       summary: {
         productCount: products.length,
         variantCount: products.reduce((total, product) => total + product.variants.length, 0),
@@ -660,6 +712,7 @@ async function updateVariantDetails(
         {
           id: variantId,
           price: input.price,
+          compareAtPrice: input.compareAtPrice || null,
           barcode: input.barcode || null
         }
       ]
@@ -697,12 +750,51 @@ async function updateInventoryItem(
       id: inventoryItemId,
       input: {
         sku: input.sku,
-        tracked: true
+        tracked: true,
+        ...(input.cost ? { cost: input.cost } : {})
       }
     }
   );
 
   const errors = mapUserErrors(data.inventoryItemUpdate.userErrors);
+  if (errors.length) {
+    throw new Error(errors.join("; "));
+  }
+}
+
+async function setWholesalePrice(admin: AdminClient, variantId: string, wholesalePrice: string) {
+  const value = cleanCell(wholesalePrice);
+  if (!value || value === "0" || value === "0.00") return;
+
+  const data = await executeGraphQL<{
+    metafieldsSet: {
+      metafields: Array<{ id: string }> | null;
+      userErrors: UserError[];
+    };
+  }>(
+    admin,
+    `#graphql
+      mutation SetWholesalePrice($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) {
+          metafields { id }
+          userErrors { field message }
+        }
+      }
+    `,
+    {
+      metafields: [
+        {
+          ownerId: variantId,
+          namespace: "custom",
+          key: "wholesale_price",
+          value,
+          type: "number_decimal"
+        }
+      ]
+    }
+  );
+
+  const errors = mapUserErrors(data.metafieldsSet.userErrors);
   if (errors.length) {
     throw new Error(errors.join("; "));
   }
@@ -903,6 +995,7 @@ export async function createProduct(
   const created = await createProductRecord(admin, input);
   await updateVariantDetails(admin, created.productId, created.variantId, input);
   await updateInventoryItem(admin, created.inventoryItemId, input);
+  await setWholesalePrice(admin, created.variantId, input.wholesalePrice);
 
   if (locationId) {
     await ensureInventoryActivated(admin, created.inventoryItemId, locationId);
@@ -921,6 +1014,7 @@ export async function updateProductRecord(
   await updateProductBasics(admin, productId, input);
   await updateVariantDetails(admin, productId, variantId, input);
   await updateInventoryItem(admin, inventoryItemId, input);
+  await setWholesalePrice(admin, variantId, input.wholesalePrice);
 
   if (locationId) {
     await updateVariantInventory(admin, locationId, inventoryItemId, input.quantity);
@@ -1001,7 +1095,7 @@ export async function deleteProducts(admin: AdminClient, productIds: string[]) {
   }
 
   if (skippedMissing.length === productIds.length) {
-    throw new Error("Los productos seleccionados ya no existen en Shopify.");
+    throw new Error("The selected products no longer exist in Shopify.");
   }
 
   if (skippedMissing.length > 0) {
@@ -1039,6 +1133,9 @@ export async function importProductsFromCsv(
       title: title || `Imported item ${index + 1}`,
       sku,
       price: cleanCell(record.price) || "0.00",
+      compareAtPrice: cleanCell(record.compareAtPrice),
+      wholesalePrice: cleanCell(record.wholesalePrice),
+      cost: cleanCell(record.cost),
       quantity: parseNumber(record.quantity, 0),
       barcode: cleanCell(record.barcode),
       vendor: cleanCell(record.vendor),
@@ -1095,6 +1192,9 @@ export function buildInventoryCsv(products: InventoryProduct[]) {
     "sku",
     "barcode",
     "price",
+    "compareAtPrice",
+    "wholesalePrice",
+    "cost",
     "quantity",
     "updatedAt"
   ];
@@ -1113,6 +1213,9 @@ export function buildInventoryCsv(products: InventoryProduct[]) {
         variant.sku,
         variant.barcode,
         variant.price,
+        variant.compareAtPrice,
+        variant.wholesalePrice,
+        variant.cost,
         variant.inventoryQuantity,
         product.updatedAt
       ]
@@ -1126,7 +1229,266 @@ export function buildInventoryCsv(products: InventoryProduct[]) {
 
 export function csvTemplate() {
   return [
-    "title,sku,price,quantity,barcode,vendor,productType,tags,status",
-    "Perfume de muestra,SKU-001,39.99,12,1234567890123,Grace Essences,Perfume,\"nicho,importado\",ACTIVE"
+    "title,sku,price,compareAtPrice,wholesalePrice,cost,quantity,barcode,vendor,productType,tags,status",
+    "Sample Perfume,SKU-001,39.99,49.99,24.99,15.00,12,1234567890123,Grace Essences,Perfume,\"niche,imported\",ACTIVE"
   ].join("\n");
+}
+
+const SEX_MAP: Record<string, string> = {
+  M: "Male",
+  L: "Lady",
+  F: "Female",
+  U: "Unisex"
+};
+
+function applySupplierMapping(
+  records: Record<string, unknown>[],
+  mapping: SupplierColumnMapping,
+  rules: SupplierPricingRules
+): ProductUpsertInput[] {
+  return records
+    .map((record, index) => {
+      const get = (col: string) => String(record[col] ?? "").trim();
+
+      const cost = parseNumber(get(mapping.costCol), 0);
+      const retailFromCol = mapping.retailPriceCol ? parseNumber(get(mapping.retailPriceCol), 0) : 0;
+      const wholesaleFromCol = mapping.wholesalePriceCol ? parseNumber(get(mapping.wholesalePriceCol), 0) : 0;
+
+      const retail = retailFromCol > 0 ? retailFromCol : cost * rules.retailMultiplier;
+      const wholesale = wholesaleFromCol > 0 ? wholesaleFromCol : cost * rules.wholesaleMultiplier;
+
+      const title = get(mapping.titleCol);
+      const barcode = get(mapping.barcodeCol);
+      let sku = get(mapping.skuCol);
+      if (!sku && mapping.useUpcAsSku && barcode) sku = barcode;
+
+      // Build tags from base tag column + extra tag columns + sheet name (category)
+      const baseTags = normalizeTags(get(mapping.tagsCol));
+      const extraTags = mapping.tagColumns
+        .map((col) => {
+          const val = get(col);
+          if (!val) return null;
+          // Map SEX column values to readable labels
+          return SEX_MAP[val.toUpperCase()] ?? val;
+        })
+        .filter((v): v is string => v !== null && v.length > 0);
+
+      // Sheet name becomes a category tag (only for Excel workbooks)
+      const sheetTag = String(record.__sheetName ?? "").trim();
+
+      const allTags = [...new Set([...baseTags, ...extraTags, ...(sheetTag ? [sheetTag] : [])])];
+
+      return {
+        title: title || `Producto ${index + 1}`,
+        sku,
+        price: retail.toFixed(2),
+        compareAtPrice: "",
+        wholesalePrice: wholesale.toFixed(2),
+        cost: cost > 0 ? cost.toFixed(2) : "",
+        quantity: parseNumber(get(mapping.quantityCol), 0),
+        barcode,
+        vendor: get(mapping.vendorCol) || rules.defaultVendor,
+        productType: get(mapping.productTypeCol) || rules.defaultProductType,
+        tags: allTags,
+        status: rules.defaultStatus
+      } satisfies ProductUpsertInput;
+    })
+    .filter((item) => item.title.trim().length > 0);
+}
+
+export function normalizeSupplierCsv(
+  csvText: string,
+  mapping: SupplierColumnMapping,
+  rules: SupplierPricingRules
+): ProductUpsertInput[] {
+  const records = parseCsv(csvText);
+  if (!records.length) return [];
+  return applySupplierMapping(records, mapping, rules);
+}
+
+export function getExcelInfo(buffer: ArrayBuffer): ExcelInfo {
+  const wb = xlsxRead(buffer, { type: "array" });
+  // Collect all unique headers across all sheets
+  const headerSet = new Set<string>();
+  for (const name of wb.SheetNames) {
+    const ws = wb.Sheets[name];
+    if (!ws) continue;
+    const rows = xlsxUtils.sheet_to_json<string[]>(ws, { header: 1, defval: "" });
+    const firstRow = rows[0] ?? [];
+    firstRow.forEach((h) => { if (h) headerSet.add(String(h)); });
+  }
+  return { sheets: wb.SheetNames, headers: [...headerSet] };
+}
+
+export function normalizeExcelWorkbook(
+  buffer: ArrayBuffer,
+  selectedSheets: string[],
+  mapping: SupplierColumnMapping,
+  rules: SupplierPricingRules
+): ProductUpsertInput[] {
+  const wb = xlsxRead(buffer, { type: "array" });
+  const allRecords: Record<string, unknown>[] = [];
+
+  const sheetsToProcess = selectedSheets.length > 0
+    ? selectedSheets
+    : wb.SheetNames;
+
+  for (const name of sheetsToProcess) {
+    const ws = wb.Sheets[name];
+    if (!ws) continue;
+    const rows = xlsxUtils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+    // Inject sheet name so applySupplierMapping can use it as a category tag
+    rows.forEach((r) => { r.__sheetName = name; });
+    allRecords.push(...rows);
+  }
+
+  return applySupplierMapping(allRecords, mapping, rules);
+}
+
+export function buildNormalizedCsv(products: ProductUpsertInput[]) {
+  // Matches the official Shopify product CSV import template column order
+  const header = [
+    "Title",
+    "URL handle",
+    "Description",
+    "Vendor",
+    "Product category",
+    "Type",
+    "Tags",
+    "Published on online store",
+    "Status",
+    "SKU",
+    "Barcode",
+    "Option1 name",
+    "Option1 value",
+    "Option1 Linked To",
+    "Option2 name",
+    "Option2 value",
+    "Option2 Linked To",
+    "Option3 name",
+    "Option3 value",
+    "Option3 Linked To",
+    "Price",
+    "Compare-at price",
+    "Cost per item",
+    "Charge tax",
+    "Tax code",
+    "Unit price total measure",
+    "Unit price total measure unit",
+    "Unit price base measure",
+    "Unit price base measure unit",
+    "Inventory tracker",
+    "Inventory quantity",
+    "Continue selling when out of stock",
+    "Weight value (grams)",
+    "Weight unit for display",
+    "Requires shipping",
+    "Fulfillment service",
+    "Product image URL",
+    "Image position",
+    "Image alt text",
+    "Variant image URL",
+    "Gift card",
+    "SEO title",
+    "SEO description",
+    "Color (product.metafields.shopify.color-pattern)",
+    "Google Shopping / Google product category",
+    "Google Shopping / Gender",
+    "Google Shopping / Age group",
+    "Google Shopping / Manufacturer part number (MPN)",
+    "Google Shopping / Ad group name",
+    "Google Shopping / Ads labels",
+    "Google Shopping / Condition",
+    "Google Shopping / Custom product",
+    "Google Shopping / Custom label 0",
+    "Google Shopping / Custom label 1",
+    "Google Shopping / Custom label 2",
+    "Google Shopping / Custom label 3",
+    "Google Shopping / Custom label 4",
+    "Wholesale price"
+  ];
+
+  function toHandle(title: string) {
+    return title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, "-");
+  }
+
+  function toShopifyStatus(s: string) {
+    const map: Record<string, string> = {
+      ACTIVE: "Active",
+      DRAFT: "Draft",
+      ARCHIVED: "Archived",
+    };
+    return map[s.toUpperCase()] ?? "Draft";
+  }
+
+  const rows = products.map((p) =>
+    [
+      p.title,
+      toHandle(p.title),
+      "",                 // Description
+      p.vendor,
+      "",                 // Product category
+      p.productType,
+      p.tags.join(", "),
+      "TRUE",             // Published on online store
+      toShopifyStatus(p.status),
+      p.sku,
+      p.barcode,
+      "Title",            // Option1 name
+      "Default Title",    // Option1 value
+      "",                 // Option1 Linked To
+      "",                 // Option2 name
+      "",                 // Option2 value
+      "",                 // Option2 Linked To
+      "",                 // Option3 name
+      "",                 // Option3 value
+      "",                 // Option3 Linked To
+      p.price,
+      p.compareAtPrice,
+      p.cost,
+      "TRUE",             // Charge tax
+      "",                 // Tax code
+      "",                 // Unit price total measure
+      "",                 // Unit price total measure unit
+      "",                 // Unit price base measure
+      "",                 // Unit price base measure unit
+      "shopify",          // Inventory tracker
+      p.quantity,
+      "DENY",             // Continue selling when out of stock
+      "",                 // Weight value (grams)
+      "",                 // Weight unit for display
+      "TRUE",             // Requires shipping
+      "manual",           // Fulfillment service
+      "",                 // Product image URL
+      "",                 // Image position
+      "",                 // Image alt text
+      "",                 // Variant image URL
+      "FALSE",            // Gift card
+      "",                 // SEO title
+      "",                 // SEO description
+      "",                 // Color metafield
+      "",                 // Google Shopping / Google product category
+      "",                 // Google Shopping / Gender
+      "",                 // Google Shopping / Age group
+      "",                 // Google Shopping / MPN
+      "",                 // Google Shopping / Ad group name
+      "",                 // Google Shopping / Ads labels
+      "",                 // Google Shopping / Condition
+      "",                 // Google Shopping / Custom product
+      "",                 // Google Shopping / Custom label 0
+      "",                 // Google Shopping / Custom label 1
+      "",                 // Google Shopping / Custom label 2
+      "",                 // Google Shopping / Custom label 3
+      "",                 // Google Shopping / Custom label 4
+      p.wholesalePrice,   // Extra column (ignored by Shopify, kept for reference)
+    ]
+      .map(csvEscape)
+      .join(",")
+  );
+
+  return [header.join(","), ...rows].join("\n");
 }

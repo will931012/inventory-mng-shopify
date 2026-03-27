@@ -1,10 +1,12 @@
+/* ─── Layout ───────────────────────────────────────────────────────────────── */
+
 .app-shell {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   background: #f3f4f6;
   font-size: 13px;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .app-sidebar {
@@ -14,13 +16,15 @@
   padding: 0.75rem;
   color: #111827;
   background: #f9fafb;
-  border-right: 1px solid #d1d5db;
+  border-right: 1px solid #e5e7eb;
 }
 
 .app-content {
   min-width: 0;
-  padding: 0.75rem 0.75rem 1rem;
+  padding: 0.75rem 0.75rem 1.5rem;
 }
+
+/* ─── Tabs ─────────────────────────────────────────────────────────────────── */
 
 .dashboard-tabs {
   display: flex;
@@ -28,28 +32,33 @@
   flex-wrap: wrap;
 }
 
+/* ─── Grids ────────────────────────────────────────────────────────────────── */
+
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
 }
 
 .split-grid {
   display: grid;
   grid-template-columns: 2fr 1fr;
-  gap: 1rem;
+  gap: 0.75rem;
 }
 
 .dual-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 1rem;
+  gap: 0.75rem;
 }
+
+/* ─── Catalog table ────────────────────────────────────────────────────────── */
 
 .catalog-table-wrap {
   overflow-x: auto;
-  margin-top: 0.5rem;
-  border: 1px solid #d1d5db;
+  margin-top: 0.75rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
   background: #fff;
 }
 
@@ -60,81 +69,145 @@
   font-size: 12px;
 }
 
+.catalog-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  z-index: 1;
+  border-bottom: 2px solid #e5e7eb;
+  white-space: nowrap;
+}
+
+.catalog-table tbody tr {
+  transition: background 0.1s ease;
+}
+
+.catalog-table tbody tr:hover {
+  background: #f8fafc;
+}
+
+.catalog-table tbody tr + tr {
+  border-top: 1px solid #f1f5f9;
+}
+
+/* ─── Actions layout in table rows ─────────────────────────────────────────── */
+
 .catalog-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.4rem;
   align-items: center;
 }
 
 .catalog-edit-panel {
-  margin-top: 0.4rem;
-  padding: 0.65rem;
-  border-radius: 0;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border-radius: 6px;
   background: #f9fafb;
-  border: 1px solid #d1d5db;
+  border: 1px solid #e5e7eb;
 }
 
 .catalog-edit-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.7rem;
+  gap: 0.6rem;
 }
+
+/* ─── Buttons ──────────────────────────────────────────────────────────────── */
 
 .shopify-admin-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 0;
+  border-radius: 4px;
   text-decoration: none;
   font-weight: 600;
-  padding: 0.45rem 0.65rem;
+  padding: 0.4rem 0.65rem;
   background: #f9fafb;
   color: #1f2937;
   border: 1px solid #d1d5db;
   font-size: 12px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  cursor: pointer;
+}
+
+.shopify-admin-button:hover {
+  background: #f1f5f9;
+  border-color: #9ca3af;
 }
 
 .danger-button {
-  border: 1px solid #ef4444;
-  border-radius: 0;
-  padding: 0.45rem 0.65rem;
-  background: #fff;
-  color: #fff;
-  color: #991b1b;
+  border: 1px solid #fca5a5;
+  border-radius: 4px;
+  padding: 0.4rem 0.65rem;
+  background: #fff5f5;
+  color: #b91c1c;
   font-weight: 600;
   cursor: pointer;
   font-size: 12px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #f87171;
+}
+
+.danger-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .ghost-button {
   border: 1px solid #d1d5db;
-  border-radius: 0;
-  padding: 0.45rem 0.65rem;
+  border-radius: 4px;
+  padding: 0.4rem 0.65rem;
   background: #fff;
-  color: #0f172a;
+  color: #374151;
   font-weight: 600;
   cursor: pointer;
   font-size: 12px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  list-style: none;
 }
+
+.ghost-button:hover {
+  background: #f1f5f9;
+  border-color: #9ca3af;
+}
+
+/* ─── Input focus ring ─────────────────────────────────────────────────────── */
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #818cf8 !important;
+  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.2);
+}
+
+/* ─── Excel / Supplier panel helpers ──────────────────────────────────────── */
 
 .excel-panel {
   background: #fff;
-  border: 1px solid #d1d5db;
-  border-radius: 0;
-  box-shadow: none;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
 }
 
 .excel-title {
   font-size: 13px;
   font-weight: 700;
-  margin: 0 0 0.35rem;
+  margin: 0 0 0.3rem;
+  color: #111827;
 }
 
 .excel-subtle {
   color: #6b7280;
   font-size: 12px;
+  margin: 0 0 0.75rem;
 }
+
+/* ─── Responsive ───────────────────────────────────────────────────────────── */
 
 @media (max-width: 1080px) {
   .app-shell {
@@ -173,16 +246,16 @@
   }
 
   .catalog-table tr {
-    border: 1px solid #d1d5db;
-    border-radius: 0;
-    margin-bottom: 0.75rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    margin-bottom: 0.6rem;
     background: #fff;
     overflow: hidden;
   }
 
   .catalog-table td {
-    border-top: 1px solid #e5e7eb;
-    padding: 0.7rem 0.8rem !important;
+    border-top: 1px solid #f1f5f9;
+    padding: 0.65rem 0.75rem !important;
   }
 
   .catalog-table td:first-child {
