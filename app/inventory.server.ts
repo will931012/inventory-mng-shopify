@@ -88,6 +88,26 @@ export type ProductUpsertInput = {
   status: "ACTIVE" | "DRAFT" | "ARCHIVED";
 };
 
+export type VariantInput = {
+  title: string;        // variant option value (e.g. "100ml EDP")
+  sku: string;
+  barcode: string;
+  price: string;
+  compareAtPrice: string;
+  wholesalePrice: string;
+  cost: string;
+  quantity: number;
+};
+
+export type ProductGroupInput = {
+  title: string;
+  vendor: string;
+  productType: string;
+  tags: string[];
+  status: "ACTIVE" | "DRAFT" | "ARCHIVED";
+  variants: VariantInput[];
+};
+
 export type SupplierColumnMapping = {
   titleCol: string;
   skuCol: string;
@@ -99,8 +119,9 @@ export type SupplierColumnMapping = {
   quantityCol: string;
   retailPriceCol: string;
   wholesalePriceCol: string;
-  tagColumns: string[];    // extra columns whose values become tags (e.g. CONCENTRATION, SEX, SIZE)
-  useUpcAsSku: boolean;    // when true, use barcodeCol value as SKU when skuCol is empty
+  tagColumns: string[];       // extra columns whose values become tags (e.g. SEX)
+  variantTitleCols: string[]; // columns that form the variant label and are stripped from the group key
+  useUpcAsSku: boolean;
 };
 
 export type SupplierPricingRules = {
@@ -1003,6 +1024,122 @@ export async function createProduct(
   }
 }
 
+export async function createProductGroup(
+  admin: AdminClient,
+  locationId: string,
+  group: ProductGroupInput
+) {
+  // Single variant: delegate to existing single-variant flow
+  if (group.variants.length <= 1) {
+    const v = group.variants[0] ?? {
+      title: "Default Title", sku: "", barcode: "",
+      price: "0.00", compareAtPrice: "", wholesalePrice: "", cost: "", quantity: 10,
+    };
+    return createProduct(admin, locationId, {
+      title: group.title, sku: v.sku, price: v.price, compareAtPrice: v.compareAtPrice,
+      wholesalePrice: v.wholesalePrice, cost: v.cost, quantity: v.quantity,
+      barcode: v.barcode, vendor: group.vendor, productType: group.productType,
+      tags: group.tags, status: group.status,
+    });
+  }
+
+  // Multi-variant: create product with productOptions so Shopify auto-creates one variant per value
+  const data = await executeGraphQL<{
+    productCreate: {
+      product: {
+        id: string;
+        variants: { nodes: Array<{ id: string; title: string; inventoryItem: { id: string } }> };
+      } | null;
+      userErrors: UserError[];
+    };
+  }>(
+    admin,
+    `#graphql
+      mutation CreateProductGroup($product: ProductCreateInput!) {
+        productCreate(product: $product) {
+          product {
+            id
+            variants(first: 50) {
+              nodes { id title inventoryItem { id } }
+            }
+          }
+          userErrors { field message }
+        }
+      }
+    `,
+    {
+      product: {
+        title: group.title,
+        vendor: group.vendor || null,
+        productType: group.productType || null,
+        tags: group.tags,
+        status: group.status,
+        productOptions: [
+          { name: "Size", values: group.variants.map((v) => ({ name: v.title })) },
+        ],
+      },
+    }
+  );
+
+  const errors = mapUserErrors(data.productCreate.userErrors);
+  if (errors.length) throw new Error(errors.join("; "));
+
+  const product = data.productCreate.product;
+  if (!product) throw new Error("Shopify did not return the created product.");
+
+  // Map returned variant nodes by title (Shopify variant.title = the option value for single-option products)
+  const nodeByTitle = new Map(
+    product.variants.nodes.map((n) => [n.title.toLowerCase().trim(), n])
+  );
+
+  // Bulk-update price, compareAtPrice, barcode, SKU for all variants in one call
+  const bulkVariants = group.variants
+    .map((v) => {
+      const node = nodeByTitle.get(v.title.toLowerCase().trim());
+      if (!node) return null;
+      return {
+        id: node.id,
+        price: v.price || "0.00",
+        compareAtPrice: v.compareAtPrice || null,
+        barcode: v.barcode || null,
+        inventoryItem: { sku: v.sku || null },
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+
+  if (bulkVariants.length) {
+    await executeGraphQL(
+      admin,
+      `#graphql
+        mutation BulkUpdateVariants($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            userErrors { field message }
+          }
+        }
+      `,
+      { productId: product.id, variants: bulkVariants }
+    );
+  }
+
+  // Set cost, wholesale price, and inventory per variant
+  for (const v of group.variants) {
+    const node = nodeByTitle.get(v.title.toLowerCase().trim());
+    if (!node) continue;
+    const asInput: ProductUpsertInput = {
+      title: group.title, sku: v.sku, price: v.price, compareAtPrice: v.compareAtPrice,
+      wholesalePrice: v.wholesalePrice, cost: v.cost, quantity: v.quantity,
+      barcode: v.barcode, vendor: group.vendor, productType: group.productType,
+      tags: group.tags, status: group.status,
+    };
+    await updateInventoryItem(admin, node.inventoryItem.id, asInput);
+    await setWholesalePrice(admin, node.id, v.wholesalePrice);
+    if (locationId) {
+      await ensureInventoryActivated(admin, node.inventoryItem.id, locationId);
+      await setInventoryQuantity(admin, node.inventoryItem.id, locationId, v.quantity);
+    }
+  }
+}
+
 export async function updateProductRecord(
   admin: AdminClient,
   locationId: string,
@@ -1245,62 +1382,87 @@ function applySupplierMapping(
   records: Record<string, unknown>[],
   mapping: SupplierColumnMapping,
   rules: SupplierPricingRules
-): ProductUpsertInput[] {
-  return records
-    .map((record, index) => {
-      const get = (col: string) => String(record[col] ?? "").trim();
+): ProductGroupInput[] {
+  const groupMap = new Map<string, ProductGroupInput>();
 
-      const cost = parseNumber(get(mapping.costCol), 0);
-      const retailFromCol = mapping.retailPriceCol ? parseNumber(get(mapping.retailPriceCol), 0) : 0;
-      const wholesaleFromCol = mapping.wholesalePriceCol ? parseNumber(get(mapping.wholesalePriceCol), 0) : 0;
+  for (const record of records) {
+    const get = (col: string) => String(record[col] ?? "").trim();
 
-      const retail = retailFromCol > 0 ? retailFromCol : cost * rules.retailMultiplier;
-      const wholesale = wholesaleFromCol > 0 ? wholesaleFromCol : cost * rules.wholesaleMultiplier;
+    const cost = parseNumber(get(mapping.costCol), 0);
+    const retailFromCol = mapping.retailPriceCol ? parseNumber(get(mapping.retailPriceCol), 0) : 0;
+    const wholesaleFromCol = mapping.wholesalePriceCol ? parseNumber(get(mapping.wholesalePriceCol), 0) : 0;
+    const retail = retailFromCol > 0 ? retailFromCol : cost * rules.retailMultiplier;
+    const wholesale = wholesaleFromCol > 0 ? wholesaleFromCol : cost * rules.wholesaleMultiplier;
 
-      const title = get(mapping.titleCol);
-      const barcode = get(mapping.barcodeCol);
-      let sku = get(mapping.skuCol);
-      if (!sku && mapping.useUpcAsSku && barcode) sku = barcode;
+    const rawTitle = get(mapping.titleCol);
+    if (!rawTitle.trim()) continue;
 
-      // Build tags from base tag column + extra tag columns + sheet name (category)
-      const baseTags = normalizeTags(get(mapping.tagsCol));
-      const extraTags = mapping.tagColumns
-        .map((col) => {
-          const val = get(col);
-          if (!val) return null;
-          // Map SEX column values to readable labels
-          return SEX_MAP[val.toUpperCase()] ?? val;
-        })
-        .filter((v): v is string => v !== null && v.length > 0);
+    const barcode = get(mapping.barcodeCol);
+    let sku = get(mapping.skuCol);
+    if (!sku && mapping.useUpcAsSku && barcode) sku = barcode;
 
-      // Sheet name becomes a category tag (only for Excel workbooks)
-      const sheetTag = String(record.__sheetName ?? "").trim();
+    // Build variant title from selected variant columns (e.g. SIZE, CONCENTRATION)
+    const variantParts = mapping.variantTitleCols
+      .map((col) => get(col))
+      .filter((v) => v && v !== "0");
+    const variantTitle = variantParts.join(" / ").trim() || "Default Title";
 
-      const allTags = [...new Set([...baseTags, ...extraTags, ...(sheetTag ? [sheetTag] : [])])];
+    // Build group key by stripping variant column values from the raw title
+    let groupKey = rawTitle;
+    for (const col of mapping.variantTitleCols) {
+      const val = get(col);
+      if (!val) continue;
+      const escaped = val.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      groupKey = groupKey.replace(new RegExp(`\\s*${escaped}\\s*`, "gi"), " ").trim();
+    }
+    groupKey = groupKey.replace(/\s+/g, " ").trim() || rawTitle;
+    // If no variant columns configured, each row is its own product
+    const effectiveKey = mapping.variantTitleCols.length > 0 ? groupKey : rawTitle;
 
-      return {
-        title: title || `Producto ${index + 1}`,
-        sku,
-        price: retail.toFixed(2),
-        compareAtPrice: "",
-        wholesalePrice: wholesale.toFixed(2),
-        cost: cost > 0 ? cost.toFixed(2) : "",
-        quantity: parseNumber(get(mapping.quantityCol), 10),
-        barcode,
+    // Build tags
+    const baseTags = normalizeTags(get(mapping.tagsCol));
+    const extraTags = mapping.tagColumns
+      .map((col) => {
+        const val = get(col);
+        if (!val) return null;
+        return SEX_MAP[val.toUpperCase()] ?? val;
+      })
+      .filter((v): v is string => v !== null && v.length > 0);
+    const sheetTag = String(record.__sheetName ?? "").trim();
+    const allTags = [...new Set([...baseTags, ...extraTags, ...(sheetTag ? [sheetTag] : [])])];
+
+    const variant: VariantInput = {
+      title: variantTitle,
+      sku,
+      barcode,
+      price: retail.toFixed(2),
+      compareAtPrice: "",
+      wholesalePrice: wholesale.toFixed(2),
+      cost: cost > 0 ? cost.toFixed(2) : "",
+      quantity: parseNumber(get(mapping.quantityCol), 10),
+    };
+
+    if (!groupMap.has(effectiveKey)) {
+      groupMap.set(effectiveKey, {
+        title: effectiveKey,
         vendor: get(mapping.vendorCol) || rules.defaultVendor,
         productType: get(mapping.productTypeCol) || rules.defaultProductType,
         tags: allTags,
-        status: rules.defaultStatus
-      } satisfies ProductUpsertInput;
-    })
-    .filter((item) => item.title.trim().length > 0);
+        status: rules.defaultStatus,
+        variants: [],
+      });
+    }
+    groupMap.get(effectiveKey)!.variants.push(variant);
+  }
+
+  return [...groupMap.values()];
 }
 
 export function normalizeSupplierCsv(
   csvText: string,
   mapping: SupplierColumnMapping,
   rules: SupplierPricingRules
-): ProductUpsertInput[] {
+): ProductGroupInput[] {
   const records = parseCsv(csvText);
   if (!records.length) return [];
   return applySupplierMapping(records, mapping, rules);
@@ -1325,7 +1487,7 @@ export function normalizeExcelWorkbook(
   selectedSheets: string[],
   mapping: SupplierColumnMapping,
   rules: SupplierPricingRules
-): ProductUpsertInput[] {
+): ProductGroupInput[] {
   const wb = xlsxRead(buffer, { type: "array" });
   const allRecords: Record<string, unknown>[] = [];
 
@@ -1345,150 +1507,80 @@ export function normalizeExcelWorkbook(
   return applySupplierMapping(allRecords, mapping, rules);
 }
 
-export function buildNormalizedCsv(products: ProductUpsertInput[]) {
+export function buildNormalizedCsv(groups: ProductGroupInput[]) {
   // Matches the official Shopify product CSV import template column order
   const header = [
-    "Title",
-    "URL handle",
-    "Description",
-    "Vendor",
-    "Product category",
-    "Type",
-    "Tags",
-    "Published on online store",
-    "Status",
-    "SKU",
-    "Barcode",
-    "Option1 name",
-    "Option1 value",
-    "Option1 Linked To",
-    "Option2 name",
-    "Option2 value",
-    "Option2 Linked To",
-    "Option3 name",
-    "Option3 value",
-    "Option3 Linked To",
-    "Price",
-    "Compare-at price",
-    "Cost per item",
-    "Charge tax",
-    "Tax code",
-    "Unit price total measure",
-    "Unit price total measure unit",
-    "Unit price base measure",
-    "Unit price base measure unit",
-    "Inventory tracker",
-    "Inventory quantity",
-    "Continue selling when out of stock",
-    "Weight value (grams)",
-    "Weight unit for display",
-    "Requires shipping",
-    "Fulfillment service",
-    "Product image URL",
-    "Image position",
-    "Image alt text",
-    "Variant image URL",
-    "Gift card",
-    "SEO title",
-    "SEO description",
-    "Color (product.metafields.shopify.color-pattern)",
-    "Google Shopping / Google product category",
-    "Google Shopping / Gender",
-    "Google Shopping / Age group",
-    "Google Shopping / Manufacturer part number (MPN)",
-    "Google Shopping / Ad group name",
-    "Google Shopping / Ads labels",
-    "Google Shopping / Condition",
-    "Google Shopping / Custom product",
-    "Google Shopping / Custom label 0",
-    "Google Shopping / Custom label 1",
-    "Google Shopping / Custom label 2",
-    "Google Shopping / Custom label 3",
+    "Title", "URL handle", "Description", "Vendor", "Product category", "Type", "Tags",
+    "Published on online store", "Status", "SKU", "Barcode",
+    "Option1 name", "Option1 value", "Option1 Linked To",
+    "Option2 name", "Option2 value", "Option2 Linked To",
+    "Option3 name", "Option3 value", "Option3 Linked To",
+    "Price", "Compare-at price", "Cost per item", "Charge tax", "Tax code",
+    "Unit price total measure", "Unit price total measure unit",
+    "Unit price base measure", "Unit price base measure unit",
+    "Inventory tracker", "Inventory quantity", "Continue selling when out of stock",
+    "Weight value (grams)", "Weight unit for display", "Requires shipping", "Fulfillment service",
+    "Product image URL", "Image position", "Image alt text", "Variant image URL", "Gift card",
+    "SEO title", "SEO description", "Color (product.metafields.shopify.color-pattern)",
+    "Google Shopping / Google product category", "Google Shopping / Gender",
+    "Google Shopping / Age group", "Google Shopping / Manufacturer part number (MPN)",
+    "Google Shopping / Ad group name", "Google Shopping / Ads labels",
+    "Google Shopping / Condition", "Google Shopping / Custom product",
+    "Google Shopping / Custom label 0", "Google Shopping / Custom label 1",
+    "Google Shopping / Custom label 2", "Google Shopping / Custom label 3",
     "Google Shopping / Custom label 4",
     "Wholesale price"
   ];
 
   function toHandle(title: string) {
-    return title
-      .toLowerCase()
-      .replace(/[^a-z0-9\s-]/g, "")
-      .trim()
-      .replace(/\s+/g, "-");
+    return title.toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-");
   }
-
   function toShopifyStatus(s: string) {
-    const map: Record<string, string> = {
-      ACTIVE: "Active",
-      DRAFT: "Draft",
-      ARCHIVED: "Archived",
-    };
-    return map[s.toUpperCase()] ?? "Draft";
+    return ({ ACTIVE: "Active", DRAFT: "Draft", ARCHIVED: "Archived" } as Record<string, string>)[s.toUpperCase()] ?? "Draft";
   }
 
-  const rows = products.map((p) =>
-    [
-      p.title,
-      toHandle(p.title),
-      "",                 // Description
-      p.vendor,
-      "",                 // Product category
-      p.productType,
-      p.tags.join(", "),
-      "TRUE",             // Published on online store
-      toShopifyStatus(p.status),
-      p.sku,
-      p.barcode,
-      "Title",            // Option1 name
-      "Default Title",    // Option1 value
-      "",                 // Option1 Linked To
-      "",                 // Option2 name
-      "",                 // Option2 value
-      "",                 // Option2 Linked To
-      "",                 // Option3 name
-      "",                 // Option3 value
-      "",                 // Option3 Linked To
-      p.price,
-      p.compareAtPrice,
-      p.cost,
-      "TRUE",             // Charge tax
-      "",                 // Tax code
-      "",                 // Unit price total measure
-      "",                 // Unit price total measure unit
-      "",                 // Unit price base measure
-      "",                 // Unit price base measure unit
-      "shopify",          // Inventory tracker
-      p.quantity,
-      "DENY",             // Continue selling when out of stock
-      "",                 // Weight value (grams)
-      "",                 // Weight unit for display
-      "TRUE",             // Requires shipping
-      "manual",           // Fulfillment service
-      "",                 // Product image URL
-      "",                 // Image position
-      "",                 // Image alt text
-      "",                 // Variant image URL
-      "FALSE",            // Gift card
-      "",                 // SEO title
-      "",                 // SEO description
-      "",                 // Color metafield
-      "",                 // Google Shopping / Google product category
-      "",                 // Google Shopping / Gender
-      "",                 // Google Shopping / Age group
-      "",                 // Google Shopping / MPN
-      "",                 // Google Shopping / Ad group name
-      "",                 // Google Shopping / Ads labels
-      "",                 // Google Shopping / Condition
-      "",                 // Google Shopping / Custom product
-      "",                 // Google Shopping / Custom label 0
-      "",                 // Google Shopping / Custom label 1
-      "",                 // Google Shopping / Custom label 2
-      "",                 // Google Shopping / Custom label 3
-      "",                 // Google Shopping / Custom label 4
-      p.wholesalePrice,   // Extra column (ignored by Shopify, kept for reference)
-    ]
-      .map(csvEscape)
-      .join(",")
-  );
+  const rows: string[] = [];
+
+  for (const group of groups) {
+    const handle = toHandle(group.title);
+    const multi = group.variants.length > 1;
+
+    group.variants.forEach((v, idx) => {
+      const first = idx === 0;
+      rows.push([
+        first ? group.title : "",
+        handle,
+        "",
+        first ? group.vendor : "",
+        "",
+        first ? group.productType : "",
+        first ? group.tags.join(", ") : "",
+        first ? "TRUE" : "",
+        first ? toShopifyStatus(group.status) : "",
+        v.sku,
+        v.barcode,
+        multi ? "Size" : "Title",
+        multi ? v.title : "Default Title",
+        "", "", "", "", "", "", "",     // Option linked-tos + Options 2&3
+        v.price,
+        v.compareAtPrice,
+        v.cost,
+        "TRUE", "", "", "", "", "",     // Charge tax + tax/unit price fields
+        "shopify",
+        String(v.quantity),
+        "DENY",
+        "", "",                         // Weight
+        "TRUE",
+        "manual",
+        "", "", "", "",                 // Images
+        first ? "FALSE" : "",
+        "", "",                         // SEO
+        "",                             // Color metafield
+        "", "", "", "", "", "", "", "", "", "", "", "", "",  // Google Shopping
+        v.wholesalePrice,
+      ].map(csvEscape).join(","));
+    });
+  }
 
   return [header.join(","), ...rows].join("\n");
 }

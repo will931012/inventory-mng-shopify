@@ -8,6 +8,7 @@ import {
   buildInventoryCsv,
   buildNormalizedCsv,
   createProduct,
+  createProductGroup,
   csvTemplate,
   deleteProducts,
   fetchAllProductIdsWithZeroPrice,
@@ -19,13 +20,13 @@ import {
   updateProductRecord,
   updateVariantInventory
 } from "../inventory.server";
-import type { ExcelInfo, ProductUpsertInput, SupplierColumnMapping, SupplierPricingRules } from "../inventory.server";
+import type { ExcelInfo, ProductGroupInput, SupplierColumnMapping, SupplierPricingRules } from "../inventory.server";
 import { authenticate } from "../shopify.server";
 
 type ActionData =
   | { ok: boolean; message: string; errors?: string[] }
   | ExcelInfo
-  | { preview: true; products: ProductUpsertInput[] };
+  | { preview: true; products: ProductGroupInput[] };
 
 const tabs = [
   { id: "overview", label: "Overview", tone: "#f59e0b" },
@@ -242,9 +243,10 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (intent === "import-single-product") {
       const productJson = String(formData.get("productJson") ?? "");
-      const product: ProductUpsertInput = JSON.parse(productJson);
-      await createProduct(admin, locationId, product);
-      return json<ActionData>({ ok: true, message: `"${product.title}" imported successfully.` });
+      const group: ProductGroupInput = JSON.parse(productJson);
+      await createProductGroup(admin, locationId, group);
+      const variantNote = group.variants.length > 1 ? ` (${group.variants.length} variants)` : "";
+      return json<ActionData>({ ok: true, message: `"${group.title}"${variantNote} imported successfully.` });
     }
 
     if (intent === "import-csv") {
@@ -282,6 +284,7 @@ export async function action({ request }: ActionFunctionArgs) {
         retailPriceCol: String(formData.get("retailPriceCol") ?? ""),
         wholesalePriceCol: String(formData.get("wholesalePriceCol") ?? ""),
         tagColumns: formData.getAll("tagColumns").map(String).filter(Boolean),
+        variantTitleCols: formData.getAll("variantTitleCols").map(String).filter(Boolean),
         useUpcAsSku: formData.get("useUpcAsSku") === "1"
       };
 
@@ -323,11 +326,20 @@ export async function action({ request }: ActionFunctionArgs) {
         });
       }
 
-      const report = await importProductsFromCsv(admin, locationId, buildNormalizedCsv(normalized));
+      let createdCount = 0;
+      const importErrors: string[] = [];
+      for (const group of normalized) {
+        try {
+          await createProductGroup(admin, locationId, group);
+          createdCount++;
+        } catch (e) {
+          importErrors.push(`"${group.title}": ${e instanceof Error ? e.message : "error"}`);
+        }
+      }
       return json<ActionData>({
-        ok: report.errors.length === 0,
-        message: `Supplier import complete. ${report.createdCount} created, ${report.updatedCount} updated.`,
-        errors: report.errors
+        ok: importErrors.length === 0,
+        message: `Supplier import complete. ${createdCount} product(s) created.`,
+        errors: importErrors
       });
     }
 
@@ -751,7 +763,7 @@ function ProductQueueRow({
   onStatusChange,
 }: {
   index: number;
-  product: ProductUpsertInput;
+  product: ProductGroupInput;
   locationId: string;
   onSkip: () => void;
   onStatusChange: (status: "done" | "error") => void;
@@ -770,14 +782,17 @@ function ProductQueueRow({
     }
   }, [fetcher.state, fetcher.data, onStatusChange]);
 
+  const v0 = product.variants[0];
+  const multiVariant = product.variants.length > 1;
+  const priceRange = multiVariant
+    ? `$${Math.min(...product.variants.map(v => parseFloat(v.price) || 0)).toFixed(2)} – $${Math.max(...product.variants.map(v => parseFloat(v.price) || 0)).toFixed(2)}`
+    : v0 ? `$${v0.price}` : "—";
+
   if (isDone) {
     return (
       <tr style={{ background: "#f0fdf4" }}>
-        <td
-          colSpan={9}
-          style={{ padding: "0.35rem 0.6rem", fontSize: "11px", color: "#166534" }}
-        >
-          ✓ #{index} — {product.title}
+        <td colSpan={8} style={{ padding: "0.35rem 0.6rem", fontSize: "11px", color: "#166534" }}>
+          ✓ #{index} — {product.title}{multiVariant ? ` (${product.variants.length} variants)` : ""}
         </td>
       </tr>
     );
@@ -790,35 +805,32 @@ function ProductQueueRow({
       <td style={{ ...cellPad, color: "#9ca3af", textAlign: "center", width: "2.5rem" }}>{index}</td>
       <td style={cellPad}>
         <div style={{ fontWeight: 600, fontSize: "12px" }}>{product.title}</div>
-        {isError && (
-          <div style={{ color: "#dc2626", fontSize: "11px", marginTop: "0.2rem" }}>{errorMsg}</div>
+        {multiVariant && (
+          <div style={{ fontSize: "10px", color: "#6b7280", marginTop: "0.15rem" }}>
+            {product.variants.map(v => v.title).join(" · ")}
+          </div>
         )}
+        {isError && <div style={{ color: "#dc2626", fontSize: "11px", marginTop: "0.2rem" }}>{errorMsg}</div>}
       </td>
       <td style={{ ...cellPad, color: "#6b7280", fontSize: "12px" }}>{product.vendor || "—"}</td>
-      <td style={{ ...cellPad, fontFamily: "monospace", fontSize: "11px" }}>
-        <div>{product.sku || "—"}</div>
-        <div style={{ color: "#9ca3af" }}>{product.barcode}</div>
+      <td style={{ ...cellPad, textAlign: "center" }}>
+        <span style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          background: multiVariant ? "#e0f2fe" : "#f3f4f6",
+          color: multiVariant ? "#0369a1" : "#6b7280",
+          borderRadius: "999px", fontSize: "10px", fontWeight: 700,
+          padding: "0.15rem 0.5rem", whiteSpace: "nowrap"
+        }}>
+          {product.variants.length} {product.variants.length === 1 ? "variant" : "variants"}
+        </span>
       </td>
       <td style={{ ...cellPad, textAlign: "right", fontSize: "12px", whiteSpace: "nowrap" }}>
-        {product.cost ? `$${product.cost}` : "—"}
+        {v0?.cost ? `$${v0.cost}` : "—"}
       </td>
       <td style={{ ...cellPad, textAlign: "right", fontSize: "12px", whiteSpace: "nowrap" }}>
-        ${product.price}
+        {priceRange}
       </td>
-      <td style={{ ...cellPad, textAlign: "right", fontSize: "12px", whiteSpace: "nowrap" }}>
-        {product.wholesalePrice ? `$${product.wholesalePrice}` : "—"}
-      </td>
-      <td
-        style={{
-          ...cellPad,
-          maxWidth: "11rem",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          color: "#6b7280",
-          fontSize: "11px",
-        }}
-      >
+      <td style={{ ...cellPad, maxWidth: "10rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#6b7280", fontSize: "11px" }}>
         {product.tags.join(", ")}
       </td>
       <td style={{ ...cellPad, whiteSpace: "nowrap" }}>
@@ -826,26 +838,12 @@ function ProductQueueRow({
           <input type="hidden" name="intent" value="import-single-product" />
           <input type="hidden" name="locationId" value={locationId} />
           <input type="hidden" name="productJson" value={JSON.stringify(product)} />
-          <button
-            type="submit"
-            disabled={isImporting}
-            style={{
-              ...darkButton,
-              fontSize: "11px",
-              padding: "0.2rem 0.45rem",
-              background: "#dbeafe",
-              borderColor: "#93c5fd",
-              color: "#1e40af",
-            }}
-          >
+          <button type="submit" disabled={isImporting}
+            style={{ ...darkButton, fontSize: "11px", padding: "0.2rem 0.45rem", background: "#dbeafe", borderColor: "#93c5fd", color: "#1e40af" }}>
             {isImporting ? "..." : "Import"}
           </button>
-          <button
-            type="button"
-            onClick={onSkip}
-            disabled={isImporting}
-            style={{ ...darkButton, fontSize: "11px", padding: "0.2rem 0.45rem" }}
-          >
+          <button type="button" onClick={onSkip} disabled={isImporting}
+            style={{ ...darkButton, fontSize: "11px", padding: "0.2rem 0.45rem" }}>
             Skip
           </button>
         </fetcher.Form>
@@ -859,7 +857,7 @@ function ImportQueuePanel({
   locationId,
   onClose,
 }: {
-  products: ProductUpsertInput[];
+  products: ProductGroupInput[];
   locationId: string;
   onClose: () => void;
 }) {
@@ -882,7 +880,7 @@ function ImportQueuePanel({
         !skipped.has(i) &&
         (!filter ||
           p.title.toLowerCase().includes(filter.toLowerCase()) ||
-          p.sku.toLowerCase().includes(filter.toLowerCase()) ||
+          (p.variants[0]?.sku ?? "").toLowerCase().includes(filter.toLowerCase()) ||
           p.vendor.toLowerCase().includes(filter.toLowerCase()))
     );
 
@@ -950,7 +948,7 @@ function ImportQueuePanel({
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
           <thead>
             <tr style={{ background: "#f8fafc", textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>
-              {["#", "Title", "Brand", "SKU / Barcode", "Cost", "Price", "Wholesale", "Tags", "Action"].map((h) => (
+              {["#", "Title", "Brand", "Variants", "Cost", "Price", "Tags", "Action"].map((h) => (
                 <th key={h} style={{ padding: "0.5rem 0.55rem", fontSize: "10px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "#6b7280", whiteSpace: "nowrap" }}>
                   {h}
                 </th>
@@ -970,7 +968,7 @@ function ImportQueuePanel({
             ))}
             {pageItems.length === 0 && (
               <tr>
-                <td colSpan={9} style={{ padding: "2rem", textAlign: "center", color: "#6b7280", fontSize: "12px" }}>
+                <td colSpan={8} style={{ padding: "2rem", textAlign: "center", color: "#6b7280", fontSize: "12px" }}>
                   No products match the filter.
                 </td>
               </tr>
@@ -1019,7 +1017,8 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [isExcel, setIsExcel] = useState(false);
   const [tagColumnsSelected, setTagColumnsSelected] = useState<string[]>([]);
-  const [queueProducts, setQueueProducts] = useState<ProductUpsertInput[] | null>(null);
+  const [variantTitleColsSelected, setVariantTitleColsSelected] = useState<string[]>([]);
+  const [queueProducts, setQueueProducts] = useState<ProductGroupInput[] | null>(null);
 
   React.useEffect(() => {
     if (previewFetcher.data && "preview" in previewFetcher.data) {
@@ -1049,6 +1048,7 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
       setIsExcel(true);
       setCsvHeaders([]);
       setTagColumnsSelected([]);
+      setVariantTitleColsSelected([]);
       const fd = new FormData();
       fd.append("intent", "detect-excel-sheets");
       fd.append("csvFile", file);
@@ -1056,6 +1056,7 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
     } else {
       setIsExcel(false);
       setTagColumnsSelected([]);
+      setVariantTitleColsSelected([]);
       const reader = new FileReader();
       reader.onload = (e) => {
         const text = e.target?.result as string;
@@ -1077,6 +1078,10 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
 
   const toggleTagCol = (col: string) => {
     setTagColumnsSelected((prev) => prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]);
+  };
+
+  const toggleVariantCol = (col: string) => {
+    setVariantTitleColsSelected((prev) => prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]);
   };
 
   // Show queue view instead of the form when preview data is loaded
@@ -1102,6 +1107,9 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
         <input type="hidden" name="locationId" value={selectedLocationId} />
         {tagColumnsSelected.map((col) => (
           <input key={col} type="hidden" name="tagColumns" value={col} />
+        ))}
+        {variantTitleColsSelected.map((col) => (
+          <input key={col} type="hidden" name="variantTitleCols" value={col} />
         ))}
 
         <div>
@@ -1180,6 +1188,35 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
                   );
                 })}
               </div>
+            </div>
+
+            <div>
+              <h3 style={{ fontSize: "13px", fontWeight: 700, marginTop: 0, marginBottom: "0.4rem" }}>Variant dimensions (Size, Type, etc.)</h3>
+              <p style={{ fontSize: "12px", color: "#6b7280", marginTop: 0, marginBottom: "0.5rem" }}>
+                Select which columns distinguish variants of the same product (e.g. SIZE, CONCENTRATION).
+                Products whose titles match after stripping these values will be grouped as one product with multiple variants.
+                Testers, minis and sets are automatically grouped when SIZE has values like "Tester" or "Set".
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                {headers.map((h) => {
+                  const active = variantTitleColsSelected.includes(h);
+                  return (
+                    <button key={h} type="button" onClick={() => toggleVariantCol(h)}
+                      style={{ fontSize: "11px", padding: "0.25rem 0.5rem",
+                        border: `1px solid ${active ? "#0ea5e9" : "#cbd5e1"}`,
+                        background: active ? "#e0f2fe" : "#f8fafc",
+                        cursor: "pointer", fontWeight: active ? 700 : 400, borderRadius: "4px",
+                        color: active ? "#0369a1" : "#374151" }}>
+                      {active ? `⬡ ${h}` : h}
+                    </button>
+                  );
+                })}
+              </div>
+              {variantTitleColsSelected.length > 0 && (
+                <p style={{ fontSize: "11px", color: "#0369a1", marginTop: "0.4rem", marginBottom: 0 }}>
+                  Variant label: <strong>{variantTitleColsSelected.join(" / ")}</strong> · Products will be grouped by title after stripping these values.
+                </p>
+              )}
             </div>
 
             <label style={{ fontSize: "12px", display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer" }}>
