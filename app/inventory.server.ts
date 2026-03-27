@@ -1378,12 +1378,27 @@ const SEX_MAP: Record<string, string> = {
   U: "Unisex"
 };
 
+// Well-known column names (upper-cased) that typically distinguish product variants
+const AUTO_VARIANT_COL_NAMES = [
+  "SIZE", "TALLA", "ML", "OZ", "VOLUMEN", "VOLUME",
+  "CONCENTRATION", "CONC", "CONCENTRACION", "CONCENTRACIÓN",
+  "TYPE", "TIPO", "FORMAT", "FORMATO", "PRESENTATION", "PRESENTACION",
+  "PESO", "WEIGHT", "CAPACITY",
+];
+
 function applySupplierMapping(
   records: Record<string, unknown>[],
   mapping: SupplierColumnMapping,
   rules: SupplierPricingRules
 ): ProductGroupInput[] {
   const groupMap = new Map<string, ProductGroupInput>();
+
+  // Auto-detect variant columns from well-known names when none are manually selected
+  const recordKeys = Object.keys(records[0] ?? {});
+  const autoVariantCols =
+    mapping.variantTitleCols.length > 0
+      ? mapping.variantTitleCols
+      : recordKeys.filter((k) => AUTO_VARIANT_COL_NAMES.includes(k.toUpperCase()));
 
   for (const record of records) {
     const get = (col: string) => String(record[col] ?? "").trim();
@@ -1401,23 +1416,15 @@ function applySupplierMapping(
     let sku = get(mapping.skuCol);
     if (!sku && mapping.useUpcAsSku && barcode) sku = barcode;
 
-    // Build variant title from selected variant columns (e.g. SIZE, CONCENTRATION)
-    const variantParts = mapping.variantTitleCols
+    // Build variant label from auto-detected (or manually selected) variant columns
+    const variantParts = autoVariantCols
       .map((col) => get(col))
       .filter((v) => v && v !== "0");
-    const variantTitle = variantParts.join(" / ").trim() || "Default Title";
+    // Fall back to SKU so each row stays unique even if no variant columns exist
+    const variantTitle = variantParts.join(" / ").trim() || sku || "Default Title";
 
-    // Build group key by stripping variant column values from the raw title
-    let groupKey = rawTitle;
-    for (const col of mapping.variantTitleCols) {
-      const val = get(col);
-      if (!val) continue;
-      const escaped = val.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      groupKey = groupKey.replace(new RegExp(`\\s*${escaped}\\s*`, "gi"), " ").trim();
-    }
-    groupKey = groupKey.replace(/\s+/g, " ").trim() || rawTitle;
-    // If no variant columns configured, each row is its own product
-    const effectiveKey = mapping.variantTitleCols.length > 0 ? groupKey : rawTitle;
+    // Always group by exact product title — automatic multi-variant grouping
+    const effectiveKey = rawTitle;
 
     // Build tags
     const baseTags = normalizeTags(get(mapping.tagsCol));
