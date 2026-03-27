@@ -1285,7 +1285,7 @@ function applySupplierMapping(
         compareAtPrice: "",
         wholesalePrice: wholesale.toFixed(2),
         cost: cost > 0 ? cost.toFixed(2) : "",
-        quantity: parseNumber(get(mapping.quantityCol), 0),
+        quantity: parseNumber(get(mapping.quantityCol), 10),
         barcode,
         vendor: get(mapping.vendorCol) || rules.defaultVendor,
         productType: get(mapping.productTypeCol) || rules.defaultProductType,

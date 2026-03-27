@@ -1147,8 +1147,15 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
                 {SUPPLIER_FIELDS.map(({ name, label, required }) => (
                   <div key={name} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", alignItems: "center" }}>
                     <label style={{ fontSize: "12px", fontWeight: required ? 600 : 400 }}>{label}{required ? " *" : ""}</label>
-                    <select name={name} style={inputStyle}>
+                    <select
+                      name={name}
+                      style={inputStyle}
+                      defaultValue={isExcel && name === "productTypeCol" ? "__sheetName" : ""}
+                    >
                       <option value="">-- Skip --</option>
+                      {isExcel && name === "productTypeCol" && (
+                        <option value="__sheetName">⬡ Sheet name (auto)</option>
+                      )}
                       {headers.map((h) => <option key={h} value={h}>{h}</option>)}
                     </select>
                   </div>
