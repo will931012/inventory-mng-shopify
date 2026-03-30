@@ -29,11 +29,11 @@ type ActionData =
   | { preview: true; products: ProductGroupInput[] };
 
 const tabs = [
-  { id: "overview", label: "Overview", tone: "#f59e0b" },
-  { id: "catalog", label: "Catalog", tone: "#0ea5e9" },
-  { id: "imports", label: "Imports", tone: "#22c55e" },
-  { id: "operations", label: "Operations", tone: "#f97316" },
-  { id: "supplier", label: "Supplier", tone: "#8b5cf6" }
+  { id: "overview",   label: "Overview",   icon: "📊" },
+  { id: "catalog",    label: "Catalog",    icon: "🗂️"  },
+  { id: "imports",    label: "Import",     icon: "📥"  },
+  { id: "supplier",   label: "Supplier",   icon: "📦"  },
+  { id: "operations", label: "Operations", icon: "⚙️"  },
 ] as const;
 
 const inputStyle: CSSProperties = {
@@ -355,37 +355,45 @@ export default function AppDashboard() {
   const navigation = useNavigation();
   const location = useLocation();
   const currentParams = new URLSearchParams(location.search);
-  const activeView = tabs.some((tab) => tab.id === data.view) ? data.view : "overview";
+  const activeView = (tabs as readonly { id: string }[]).some((t) => t.id === data.view) ? data.view : "overview";
   const isSubmitting = navigation.state === "submitting";
-  const submittingIntent = navigation.formData?.get("intent");
+  const submittingIntent = String(navigation.formData?.get("intent") ?? "");
 
   return (
-    <main style={{ color: "#0f172a" }}>
-      <section style={{ background: "#fff", borderRadius: "6px", padding: "0.85rem 1rem", border: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
-        <div>
-          <p style={{ margin: 0, color: "#9ca3af", fontWeight: 700, letterSpacing: "0.07em", fontSize: "10px", textTransform: "uppercase" }}>Inventory Management</p>
-          <h1 style={{ margin: "0.2rem 0 0.1rem", fontSize: "17px", lineHeight: 1.2, color: "#111827" }}>Catalog & Inventory</h1>
-          <p style={{ margin: 0, color: "#6b7280", fontSize: "12px" }}>
-            Manage products, stock, imports and supplier normalization.
-          </p>
-        </div>
-        <div style={{ background: "#f8fafc", borderRadius: "6px", padding: "0.55rem 0.8rem", border: "1px solid #e5e7eb", textAlign: "right" }}>
-          <p style={{ margin: 0, fontSize: "10px", color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.06em" }}>Connected store</p>
-          <strong style={{ display: "block", marginTop: "0.15rem", fontSize: "13px", color: "#111827" }}>{data.shop?.name ?? "Shopify Store"}</strong>
-          <span style={{ color: "#6b7280", fontSize: "11px" }}>{data.shop?.myshopifyDomain ?? "Domain unavailable"}</span>
-        </div>
-      </section>
+    <div style={{ minHeight: "100vh", background: "#f1f5f9", color: "#0f172a" }}>
 
-      {actionData && "ok" in actionData ? (
-        <Banner ok={actionData.ok} message={actionData.message} errors={"errors" in actionData ? actionData.errors : undefined} />
-      ) : null}
-      {data.loadWarning ? (
-        <section style={{ marginTop: "1rem", background: "#fef3c7", color: "#92400e", borderRadius: "1rem", padding: "1rem 1.2rem" }}>
-          <strong>{data.loadWarning}</strong>
-        </section>
-      ) : null}
+      {/* ── Sticky header ──────────────────────────────────────────── */}
+      <header style={{
+        position: "sticky", top: 0, zIndex: 20,
+        background: "#fff", borderBottom: "1px solid #e2e8f0",
+        padding: "0 1.25rem", height: "50px",
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.55rem" }}>
+          <span style={{ fontSize: "18px", lineHeight: 1 }}>🧴</span>
+          <span style={{ fontWeight: 700, fontSize: "13px", color: "#0f172a", letterSpacing: "-0.01em" }}>
+            Inventory Manager
+          </span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          {data.loadWarning && (
+            <span style={{ fontSize: "11px", color: "#b45309", background: "#fef9c3", padding: "0.2rem 0.55rem", borderRadius: "999px", border: "1px solid #fde68a" }}>
+              ⚠ {data.loadWarning}
+            </span>
+          )}
+          <div style={{ textAlign: "right", lineHeight: 1.3 }}>
+            <div style={{ fontSize: "12px", fontWeight: 600, color: "#0f172a" }}>{data.shop?.name ?? "Shopify Store"}</div>
+            <div style={{ fontSize: "10px", color: "#94a3b8" }}>{data.shop?.myshopifyDomain ?? ""}</div>
+          </div>
+        </div>
+      </header>
 
-      <section className="dashboard-tabs" style={{ marginTop: "0.75rem" }}>
+      {/* ── Tab bar ────────────────────────────────────────────────── */}
+      <nav style={{
+        background: "#fff", borderBottom: "1px solid #e2e8f0",
+        padding: "0 1.25rem", display: "flex", overflowX: "auto",
+        scrollbarWidth: "none" as const,
+      }}>
         {tabs.map((tab) => {
           const params = new URLSearchParams(currentParams);
           params.set("view", tab.id);
@@ -398,102 +406,267 @@ export default function AppDashboard() {
               to={`/app?${params.toString()}`}
               prefetch="intent"
               style={{
-                display: "inline-flex", alignItems: "center", gap: "0.4rem",
-                padding: "0.4rem 0.75rem",
-                borderRadius: "999px",
-                textDecoration: "none", fontWeight: 600, fontSize: "12px",
-                border: `1px solid ${active ? tab.tone : "#e5e7eb"}`,
-                color: active ? "#0f172a" : "#6b7280",
-                background: active ? "#fff" : "transparent",
-                boxShadow: active ? `0 0 0 2px ${tab.tone}22` : "none",
-                transition: "all 0.12s ease"
+                display: "inline-flex", alignItems: "center", gap: "0.35rem",
+                padding: "0 0.9rem", height: "41px",
+                fontSize: "12px", fontWeight: active ? 700 : 500,
+                color: active ? "#1d4ed8" : "#64748b",
+                borderBottom: `2px solid ${active ? "#1d4ed8" : "transparent"}`,
+                textDecoration: "none", whiteSpace: "nowrap",
+                transition: "color 0.12s", marginBottom: "-1px",
               }}
             >
-              <span style={{ width: "6px", height: "6px", borderRadius: "999px", background: tab.tone, flexShrink: 0 }} />
+              <span style={{ fontSize: "12px" }}>{tab.icon}</span>
               {tab.label}
             </Link>
           );
         })}
-      </section>
+      </nav>
 
-      {activeView === "overview" ? (
-        <section className="metrics-grid" style={{ marginTop: "0.75rem" }}>
-          {[
-            { label: "Products", value: data.summary.productCount, accent: "#6366f1" },
-            { label: "Variants", value: data.summary.variantCount, accent: "#0ea5e9" },
-            { label: "Available units", value: data.summary.inventoryUnits, accent: "#22c55e" },
-            { label: "Locations", value: data.locations.length, accent: "#f59e0b" }
-          ].map((card) => (
-            <article key={card.label} style={{ ...panelStyle, borderTop: `3px solid ${card.accent}` }}>
-              <p style={{ marginTop: 0, color: "#6b7280", fontSize: "11px", marginBottom: "0.3rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>{card.label}</p>
-              <strong style={{ fontSize: "22px", color: "#111827" }}>{card.value.toLocaleString()}</strong>
-            </article>
-          ))}
-        </section>
-      ) : null}
+      {/* ── Page content ───────────────────────────────────────────── */}
+      <main style={{ padding: "1.25rem", maxWidth: "1400px", margin: "0 auto" }}>
+        {actionData && "ok" in actionData && (
+          <div style={{ marginBottom: "1rem" }}>
+            <Banner ok={actionData.ok} message={actionData.message} errors={"errors" in actionData ? actionData.errors : undefined} />
+          </div>
+        )}
 
-      {(activeView === "overview" || activeView === "catalog") ? (
-        <section className="split-grid" style={{ marginTop: "1rem" }}>
-          <article style={panelStyle}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
-              <div>
-                <h2 style={{ marginBottom: "0.3rem", marginTop: 0 }}>Search & Export</h2>
-                <p style={{ margin: 0, color: "#64748b" }}>Filter by title, SKU, vendor or any term supported by Shopify.</p>
+        {activeView === "overview" && (
+          <OverviewTab
+            summary={data.summary}
+            locations={data.locations}
+            shop={data.shop}
+            csvTemplate={data.csvTemplate}
+          />
+        )}
+
+        {activeView === "catalog" && (
+          <>
+            <section style={{ ...panelStyle, marginBottom: "1rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem", flexWrap: "wrap", gap: "0.5rem" }}>
+                <h2 style={{ margin: 0, fontSize: "13px", fontWeight: 700 }}>Search & Filter</h2>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="export" />
+                  <input type="hidden" name="query" value={data.query} />
+                  <input type="hidden" name="locationId" value={data.selectedLocationId} />
+                  <button type="submit" style={darkButton}>Export CSV</button>
+                </Form>
               </div>
-              <Form method="post">
-                <input type="hidden" name="intent" value="export" />
-                <input type="hidden" name="query" value={data.query} />
-                <input type="hidden" name="locationId" value={data.selectedLocationId} />
-                <button type="submit" style={darkButton}>Export CSV</button>
-              </Form>
-            </div>
-            <Form method="get" style={{ marginTop: "1rem", display: "grid", gap: "0.8rem" }}>
-              <input type="hidden" name="view" value={activeView} />
-              <div className="split-grid" style={{ gridTemplateColumns: "2fr 1fr auto", gap: "0.8rem" }}>
-                <input type="text" name="q" defaultValue={data.query} placeholder="e.g. perfume, SKU-001, vendor:Grace" style={inputStyle} />
-                <select name="locationId" defaultValue={data.selectedLocationId} style={inputStyle}>
+              <Form method="get" style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+                <input type="hidden" name="view" value="catalog" />
+                <input type="text" name="q" defaultValue={data.query} placeholder="Title, SKU, vendor…" style={{ ...inputStyle, flex: "1 1 200px", width: "auto" }} />
+                <select name="locationId" defaultValue={data.selectedLocationId} style={{ ...inputStyle, width: "auto" }}>
                   {data.locations.length === 0 ? <option value="">No location</option> : null}
-                  {data.locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+                  {data.locations.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
                 </select>
                 <button type="submit" style={primaryButton}>Search</button>
-              </div>
-            </Form>
-          </article>
-          <article style={{ ...panelStyle, background: "#fff7ed" }}>
-            <h2 style={{ marginTop: 0, marginBottom: "0.5rem" }}>CSV Template</h2>
-            <p style={{ color: "#9a3412", marginTop: 0 }}>Use these columns to create or update products by SKU.</p>
-            <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontSize: "0.82rem", color: "#7c2d12", background: "rgba(255,255,255,0.75)", padding: "0.8rem", borderRadius: "0.9rem" }}>{data.csvTemplate}</pre>
-          </article>
-        </section>
-      ) : null}
+              </Form>
+            </section>
+            <CatalogPanel
+              shopDomain={data.shop?.myshopifyDomain}
+              currencyCode={data.shop?.currencyCode ?? "USD"}
+              selectedLocationId={data.selectedLocationId}
+              products={data.products}
+              isSubmitting={isSubmitting}
+            />
+          </>
+        )}
 
-      {(activeView === "overview" || activeView === "imports") ? (
-        <section className="dual-grid" style={{ marginTop: "1rem" }}>
-          <CreatePanel selectedLocationId={data.selectedLocationId} isSubmitting={isSubmitting} />
-          <ImportPanel selectedLocationId={data.selectedLocationId} isSubmitting={isSubmitting} />
-        </section>
-      ) : null}
+        {activeView === "imports" && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: "1rem" }}>
+            <CreatePanel selectedLocationId={data.selectedLocationId} isSubmitting={isSubmitting} />
+            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <ImportPanel selectedLocationId={data.selectedLocationId} isSubmitting={isSubmitting} />
+              <CsvTemplateCard csvTemplate={data.csvTemplate} />
+            </div>
+          </div>
+        )}
 
-      {activeView === "supplier" ? (
-        <section style={{ marginTop: "1rem" }}>
+        {activeView === "supplier" && (
           <SupplierPanel selectedLocationId={data.selectedLocationId} isSubmitting={isSubmitting} />
-        </section>
-      ) : null}
+        )}
 
-      {(activeView === "overview" || activeView === "operations" || activeView === "catalog") ? (
-        <CatalogPanel
-          shopDomain={data.shop?.myshopifyDomain}
-          currencyCode={data.shop?.currencyCode ?? "USD"}
-          selectedLocationId={data.selectedLocationId}
-          query={data.query}
-          products={data.products}
-          isSubmitting={isSubmitting}
-          submittingIntent={String(submittingIntent ?? "")}
-        />
-      ) : null}
-    </main>
+        {activeView === "operations" && (
+          <OperationsPanel
+            selectedLocationId={data.selectedLocationId}
+            query={data.query}
+            products={data.products}
+            isSubmitting={isSubmitting}
+            submittingIntent={submittingIntent}
+          />
+        )}
+      </main>
+    </div>
   );
 }
+
+// ─── Overview tab ──────────────────────────────────────────────────────────────
+
+function OverviewTab({
+  summary,
+  locations,
+  shop,
+  csvTemplate,
+}: {
+  summary: { productCount: number; variantCount: number; inventoryUnits: number };
+  locations: { id: string; name: string }[];
+  shop: { name?: string; myshopifyDomain?: string; currencyCode?: string } | null | undefined;
+  csvTemplate: string;
+}) {
+  const cards = [
+    { label: "Products",         value: summary.productCount,    accent: "#6366f1", icon: "🛍️" },
+    { label: "Variants",         value: summary.variantCount,    accent: "#0ea5e9", icon: "🔀" },
+    { label: "Inventory units",  value: summary.inventoryUnits,  accent: "#22c55e", icon: "📦" },
+    { label: "Locations",        value: locations.length,        accent: "#f59e0b", icon: "📍" },
+  ];
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem" }}>
+        {cards.map((c) => (
+          <article key={c.label} style={{ ...panelStyle, borderTop: `3px solid ${c.accent}` }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>
+              <span style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#6b7280", fontWeight: 600 }}>{c.label}</span>
+              <span style={{ fontSize: "16px" }}>{c.icon}</span>
+            </div>
+            <strong style={{ fontSize: "26px", color: "#0f172a", lineHeight: 1.1 }}>{c.value.toLocaleString()}</strong>
+          </article>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
+        <article style={panelStyle}>
+          <h2 style={{ margin: "0 0 0.75rem", fontSize: "13px", fontWeight: 700 }}>Store info</h2>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem", fontSize: "12px" }}>
+            {[
+              { label: "Store name", value: shop?.name ?? "—" },
+              { label: "Domain",     value: shop?.myshopifyDomain ?? "—" },
+              { label: "Currency",   value: shop?.currencyCode ?? "—" },
+              { label: "Locations",  value: locations.map((l) => l.name).join(", ") || "—" },
+            ].map(({ label, value }) => (
+              <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: "1rem", padding: "0.3rem 0", borderBottom: "1px solid #f1f5f9" }}>
+                <span style={{ color: "#6b7280" }}>{label}</span>
+                <strong style={{ color: "#0f172a" }}>{value}</strong>
+              </div>
+            ))}
+          </div>
+        </article>
+        <article style={{ ...panelStyle, background: "#fff7ed", border: "1px solid #fed7aa" }}>
+          <h2 style={{ margin: "0 0 0.4rem", fontSize: "13px", fontWeight: 700, color: "#9a3412" }}>CSV import template</h2>
+          <p style={{ margin: "0 0 0.5rem", fontSize: "11px", color: "#c2410c" }}>Columns for creating/updating products by SKU.</p>
+          <pre style={{ margin: 0, fontSize: "10px", color: "#7c2d12", background: "rgba(255,255,255,0.7)", padding: "0.6rem", borderRadius: "4px", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{csvTemplate}</pre>
+        </article>
+      </div>
+    </div>
+  );
+}
+
+// ─── CSV template card (Import tab) ────────────────────────────────────────────
+
+function CsvTemplateCard({ csvTemplate }: { csvTemplate: string }) {
+  return (
+    <article style={{ ...panelStyle, background: "#fff7ed", border: "1px solid #fed7aa" }}>
+      <h2 style={{ margin: "0 0 0.4rem", fontSize: "13px", fontWeight: 700, color: "#9a3412" }}>CSV Template</h2>
+      <p style={{ margin: "0 0 0.5rem", fontSize: "11px", color: "#c2410c" }}>Use these columns to create or update products by SKU.</p>
+      <pre style={{ margin: 0, fontSize: "10px", color: "#7c2d12", background: "rgba(255,255,255,0.7)", padding: "0.6rem", borderRadius: "4px", whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{csvTemplate}</pre>
+    </article>
+  );
+}
+
+// ─── Operations tab ─────────────────────────────────────────────────────────────
+
+function OperationsPanel({
+  selectedLocationId,
+  query,
+  products,
+  isSubmitting,
+  submittingIntent,
+}: {
+  selectedLocationId: string;
+  query: string;
+  products: Awaited<ReturnType<typeof fetchInventoryDashboard>>["products"];
+  isSubmitting: boolean;
+  submittingIntent: string;
+}) {
+  const zeroInView = products.filter((p) => p.variants.some((v) => Number(v.price ?? "0") === 0));
+  const deletingView  = isSubmitting && submittingIntent === "delete-products-with-zero-price";
+  const deletingAll   = isSubmitting && submittingIntent === "delete-all-products-with-zero-price";
+
+  const opRow = (
+    title: string,
+    desc: React.ReactNode,
+    form: React.ReactNode
+  ) => (
+    <div style={{
+      background: "#fff", border: "1px solid #fecaca", borderRadius: "6px",
+      padding: "0.85rem 1rem", display: "flex", justifyContent: "space-between",
+      alignItems: "center", gap: "1rem", flexWrap: "wrap",
+    }}>
+      <div style={{ flex: "1 1 200px" }}>
+        <strong style={{ fontSize: "12px", display: "block", marginBottom: "0.2rem" }}>{title}</strong>
+        <p style={{ margin: 0, fontSize: "11px", color: "#6b7280" }}>{desc}</p>
+      </div>
+      {form}
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+      <article style={{ ...panelStyle, border: "1px solid #fca5a5", background: "#fff5f5" }}>
+        <h2 style={{ margin: "0 0 0.3rem", fontSize: "13px", fontWeight: 700, color: "#991b1b" }}>⚠ Danger Zone — Bulk operations</h2>
+        <p style={{ margin: "0 0 1rem", fontSize: "12px", color: "#b91c1c" }}>
+          These actions permanently delete products from Shopify and cannot be undone.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+          {opRow(
+            "Delete price 0.00 — current view",
+            <>Affects only the current search filter.{" "}
+              {zeroInView.length > 0
+                ? <span style={{ color: "#dc2626", fontWeight: 600 }}>{zeroInView.length} found.</span>
+                : "None found in current view."}
+            </>,
+            <Form method="post" onSubmit={(e) => { if (!window.confirm(`Delete ${zeroInView.length} product(s) with price 0.00 from this view?`)) e.preventDefault(); }}>
+              <input type="hidden" name="intent" value="delete-products-with-zero-price" />
+              <input type="hidden" name="locationId" value={selectedLocationId} />
+              <input type="hidden" name="query" value={query} />
+              <button type="submit" disabled={isSubmitting || zeroInView.length === 0} className="danger-button">
+                {deletingView ? "Deleting…" : "Delete view 0.00"}
+              </button>
+            </Form>
+          )}
+          {opRow(
+            "Delete price 0.00 — entire store",
+            "Scans all products in the store. May take a few seconds.",
+            <Form method="post" onSubmit={(e) => { if (!window.confirm("Delete ALL products with price 0.00 from the entire store?")) e.preventDefault(); }}>
+              <input type="hidden" name="intent" value="delete-all-products-with-zero-price" />
+              <button type="submit" disabled={isSubmitting} className="danger-button">
+                {deletingAll ? "Deleting…" : "Delete all 0.00"}
+              </button>
+            </Form>
+          )}
+        </div>
+      </article>
+
+      {zeroInView.length > 0 && (
+        <article style={panelStyle}>
+          <h2 style={{ margin: "0 0 0.75rem", fontSize: "13px", fontWeight: 700 }}>
+            Zero-price products in current view ({zeroInView.length})
+          </h2>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+            {zeroInView.slice(0, 25).map((p) => (
+              <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "0.35rem 0.6rem", background: "#fef2f2", borderRadius: "4px", border: "1px solid #fecaca", fontSize: "12px" }}>
+                <span>{p.title}</span>
+                <span style={{ color: "#dc2626", fontWeight: 600 }}>$0.00</span>
+              </div>
+            ))}
+            {zeroInView.length > 25 && (
+              <p style={{ margin: "0.25rem 0 0", fontSize: "11px", color: "#6b7280" }}>…and {zeroInView.length - 25} more</p>
+            )}
+          </div>
+        </article>
+      )}
+    </div>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 
 function Banner({ ok, message, errors }: { ok: boolean; message: string; errors?: string[] }) {
   return (
@@ -582,58 +755,20 @@ function CatalogPanel({
   shopDomain,
   currencyCode,
   selectedLocationId,
-  query,
   products,
   isSubmitting,
-  submittingIntent
 }: {
   shopDomain?: string;
   currencyCode: string;
   selectedLocationId: string;
-  query: string;
   products: Awaited<ReturnType<typeof fetchInventoryDashboard>>["products"];
   isSubmitting: boolean;
-  submittingIntent: string;
 }) {
-  const deletingViewZeroPrice = isSubmitting && submittingIntent === "delete-products-with-zero-price";
-  const deletingAllZeroPrice = isSubmitting && submittingIntent === "delete-all-products-with-zero-price";
-
   return (
-    <section style={{ ...panelStyle, marginTop: "0.75rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem", flexWrap: "wrap", marginBottom: "0.25rem" }}>
-        <div>
-          <h2 className="excel-title" style={{ marginBottom: "0.2rem" }}>Catalog</h2>
-          <p className="excel-subtle" style={{ marginBottom: 0 }}>Open in Shopify, quick-edit fields, adjust stock or delete.</p>
-          {deletingAllZeroPrice ? (
-            <p style={{ marginTop: "0.4rem", color: "#b45309", fontSize: "12px" }}>
-              Deleting all products with price 0.00...
-            </p>
-          ) : null}
-        </div>
-        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-          <Form method="post" onSubmit={(event) => {
-            if (!window.confirm("Products in this view with price 0.00 will be deleted. Continue?")) {
-              event.preventDefault();
-            }
-          }}>
-            <input type="hidden" name="intent" value="delete-products-with-zero-price" />
-            <input type="hidden" name="locationId" value={selectedLocationId} />
-            <input type="hidden" name="query" value={query} />
-            <button type="submit" disabled={isSubmitting} className="danger-button">
-              {deletingViewZeroPrice ? "Deleting view..." : "Delete view 0.00"}
-            </button>
-          </Form>
-          <Form method="post" onSubmit={(event) => {
-            if (!window.confirm("All products in the store with price 0.00 will be deleted. Continue?")) {
-              event.preventDefault();
-            }
-          }}>
-            <input type="hidden" name="intent" value="delete-all-products-with-zero-price" />
-            <button type="submit" disabled={isSubmitting} className="danger-button">
-              {deletingAllZeroPrice ? "Deleting entire store..." : "Delete all 0.00"}
-            </button>
-          </Form>
-        </div>
+    <section style={panelStyle}>
+      <div style={{ marginBottom: "0.5rem" }}>
+        <h2 className="excel-title" style={{ marginBottom: "0.15rem" }}>Products</h2>
+        <p className="excel-subtle" style={{ marginBottom: 0 }}>Open in Shopify, quick-edit fields, adjust stock or delete.</p>
       </div>
       <Form method="post">
         <input type="hidden" name="intent" value="delete-products" />
