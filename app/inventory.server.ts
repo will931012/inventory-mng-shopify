@@ -373,292 +373,220 @@ export async function fetchInventoryDashboard(
 ): Promise<InventoryDashboardData> {
   const locations = await fetchLocations(admin);
   const selectedLocationId =
-    preferredLocationId && locations.some((location) => location.id === preferredLocationId)
+    preferredLocationId && locations.some((l) => l.id === preferredLocationId)
       ? preferredLocationId
       : locations[0]?.id ?? "";
 
-  try {
-    const data = await executeGraphQL<{
-      shop: ShopSummary;
-      products: {
-        nodes: Array<{
-          id: string;
-          title: string;
-          handle: string;
-          status: string;
-          vendor: string | null;
-          productType: string | null;
-          tags: string[];
-          totalInventory: number | null;
-          updatedAt: string;
-          featuredImage: {
-            url: string;
-            altText: string | null;
-          } | null;
-          variants: {
+  // ── Shared types ────────────────────────────────────────────────────────────
+  type FullNode = {
+    id: string; title: string; handle: string; status: string;
+    vendor: string | null; productType: string | null; tags: string[];
+    totalInventory: number | null; updatedAt: string;
+    featuredImage: { url: string; altText: string | null } | null;
+    variants: {
+      nodes: Array<{
+        id: string; title: string; compareAtPrice: string | null;
+        barcode: string | null; price: string | null; inventoryQuantity: number | null;
+        wholesaleMeta: { value: string } | null;
+        inventoryItem: {
+          id: string; sku: string | null; tracked: boolean | null;
+          unitCost: { amount: string } | null;
+          inventoryLevels: {
             nodes: Array<{
-              id: string;
-              title: string;
-              compareAtPrice: string | null;
-              barcode: string | null;
-              price: string | null;
-              inventoryQuantity: number | null;
-              wholesaleMeta: { value: string } | null;
-              inventoryItem: {
-                id: string;
-                sku: string | null;
-                tracked: boolean | null;
-                unitCost: { amount: string } | null;
-                inventoryLevels: {
-                  nodes: Array<{
-                    location: {
-                      id: string;
-                      name: string;
-                    };
-                    quantities: Array<{
-                      name: string;
-                      quantity: number;
-                    }>;
-                  }>;
-                };
-              };
+              location: { id: string; name: string };
+              quantities: Array<{ name: string; quantity: number }>;
             }>;
           };
-        }>;
-      };
-    }>(
-      admin,
-      `#graphql
-        query InventoryDashboard($query: String!) {
-          shop {
-            name
-            myshopifyDomain
-            currencyCode
-          }
-          products(first: 40, sortKey: UPDATED_AT, reverse: true, query: $query) {
-            nodes {
-              id
-              title
-              handle
-              status
-              vendor
-              productType
-              tags
-              totalInventory
-              updatedAt
-              featuredImage {
-                url
-                altText
-              }
-              variants(first: 20) {
-                nodes {
-                  id
-                  title
-                  compareAtPrice
-                  barcode
-                  price
-                  inventoryQuantity
-                  wholesaleMeta: metafield(namespace: "custom", key: "wholesale_price") {
-                    value
-                  }
-                  inventoryItem {
-                    id
-                    sku
-                    tracked
-                    unitCost {
-                      amount
-                    }
-                    inventoryLevels(first: 20) {
-                      nodes {
-                        location {
-                          id
-                          name
-                        }
-                        quantities(names: ["available"]) {
-                          name
-                          quantity
+        };
+      }>;
+    };
+  };
+
+  type FallbackNode = {
+    id: string; title: string; handle: string; status: string;
+    vendor: string | null; productType: string | null; tags: string[];
+    totalInventory: number | null; updatedAt: string;
+    featuredImage: { url: string; altText: string | null } | null;
+    variants: {
+      nodes: Array<{
+        id: string; title: string; barcode: string | null;
+        price: string | null; inventoryQuantity: number | null;
+        inventoryItem: { id: string; sku: string | null; tracked: boolean | null };
+      }>;
+    };
+  };
+
+  type PageInfo = { hasNextPage: boolean; endCursor: string | null };
+
+  function mapFull(p: FullNode): InventoryProduct {
+    return {
+      id: p.id, title: p.title, handle: p.handle, status: p.status,
+      vendor: p.vendor ?? "", productType: p.productType ?? "",
+      tags: p.tags ?? [], totalInventory: p.totalInventory ?? 0,
+      updatedAt: p.updatedAt,
+      imageUrl: p.featuredImage?.url ?? null,
+      imageAlt: p.featuredImage?.altText ?? null,
+      variants: p.variants.nodes.map((v) => ({
+        id: v.id, title: v.title,
+        sku: v.inventoryItem?.sku ?? "",
+        barcode: v.barcode ?? "",
+        price: v.price ?? "0.00",
+        compareAtPrice: v.compareAtPrice ?? "",
+        wholesalePrice: v.wholesaleMeta?.value ?? "",
+        cost: v.inventoryItem?.unitCost?.amount ?? "",
+        inventoryQuantity: v.inventoryQuantity ?? 0,
+        inventoryItemId: v.inventoryItem.id,
+        tracked: Boolean(v.inventoryItem.tracked),
+        inventoryLevels: v.inventoryItem.inventoryLevels.nodes.map((lvl) => ({
+          locationId: lvl.location.id,
+          locationName: lvl.location.name,
+          available: lvl.quantities.find((q) => q.name === "available")?.quantity ?? 0,
+        })),
+      })),
+    };
+  }
+
+  function mapFallback(p: FallbackNode): InventoryProduct {
+    return {
+      id: p.id, title: p.title, handle: p.handle, status: p.status,
+      vendor: p.vendor ?? "", productType: p.productType ?? "",
+      tags: p.tags ?? [], totalInventory: p.totalInventory ?? 0,
+      updatedAt: p.updatedAt,
+      imageUrl: p.featuredImage?.url ?? null,
+      imageAlt: p.featuredImage?.altText ?? null,
+      variants: p.variants.nodes.map((v) => ({
+        id: v.id, title: v.title,
+        sku: v.inventoryItem?.sku ?? "",
+        barcode: v.barcode ?? "",
+        price: v.price ?? "0.00",
+        compareAtPrice: "", wholesalePrice: "", cost: "",
+        inventoryQuantity: v.inventoryQuantity ?? 0,
+        inventoryItemId: v.inventoryItem.id,
+        tracked: Boolean(v.inventoryItem.tracked),
+        inventoryLevels: [],
+      })),
+    };
+  }
+
+  function buildSummary(products: InventoryProduct[]) {
+    return {
+      productCount: products.length,
+      variantCount: products.reduce((t, p) => t + p.variants.length, 0),
+      inventoryUnits: products.reduce((t, p) => t + p.totalInventory, 0),
+    };
+  }
+
+  type FullPageResult     = { shop: ShopSummary; products: { nodes: FullNode[];     pageInfo: PageInfo } };
+  type FallbackPageResult = { shop: ShopSummary; products: { nodes: FallbackNode[]; pageInfo: PageInfo } };
+
+  // ── Full query with inventory levels (paginated) ────────────────────────────
+  try {
+    const allProducts: InventoryProduct[] = [];
+    let shop: ShopSummary | null = null;
+    let cursor: string | null = null;
+    let hasMore = true;
+
+    while (hasMore) {
+      const page: FullPageResult = await executeGraphQL<FullPageResult>(
+        admin,
+        `#graphql
+          query InventoryDashboard($query: String!, $cursor: String) {
+            shop { name myshopifyDomain currencyCode }
+            products(first: 40, after: $cursor, sortKey: UPDATED_AT, reverse: true, query: $query) {
+              nodes {
+                id title handle status vendor productType tags totalInventory updatedAt
+                featuredImage { url altText }
+                variants(first: 20) {
+                  nodes {
+                    id title compareAtPrice barcode price inventoryQuantity
+                    wholesaleMeta: metafield(namespace: "custom", key: "wholesale_price") { value }
+                    inventoryItem {
+                      id sku tracked
+                      unitCost { amount }
+                      inventoryLevels(first: 20) {
+                        nodes {
+                          location { id name }
+                          quantities(names: ["available"]) { name quantity }
                         }
                       }
                     }
                   }
                 }
               }
+              pageInfo { hasNextPage endCursor }
             }
           }
-        }
-      `,
-      {
-        query: searchQuery.trim()
-      }
-    );
+        `,
+        { query: searchQuery.trim(), cursor }
+      );
 
-    const products = data.products.nodes.map<InventoryProduct>((product) => ({
-      id: product.id,
-      title: product.title,
-      handle: product.handle,
-      status: product.status,
-      vendor: product.vendor ?? "",
-      productType: product.productType ?? "",
-      tags: product.tags ?? [],
-      totalInventory: product.totalInventory ?? 0,
-      updatedAt: product.updatedAt,
-      imageUrl: product.featuredImage?.url ?? null,
-      imageAlt: product.featuredImage?.altText ?? null,
-      variants: product.variants.nodes.map((variant) => ({
-        id: variant.id,
-        title: variant.title,
-        sku: variant.inventoryItem?.sku ?? "",
-        barcode: variant.barcode ?? "",
-        price: variant.price ?? "0.00",
-        compareAtPrice: variant.compareAtPrice ?? "",
-        wholesalePrice: variant.wholesaleMeta?.value ?? "",
-        cost: variant.inventoryItem?.unitCost?.amount ?? "",
-        inventoryQuantity: variant.inventoryQuantity ?? 0,
-        inventoryItemId: variant.inventoryItem.id,
-        tracked: Boolean(variant.inventoryItem.tracked),
-        inventoryLevels: variant.inventoryItem.inventoryLevels.nodes.map((level) => ({
-          locationId: level.location.id,
-          locationName: level.location.name,
-          available: level.quantities.find((quantity) => quantity.name === "available")?.quantity ?? 0
-        }))
-      }))
-    }));
+      if (!shop) shop = page.shop;
+      allProducts.push(...page.products.nodes.map(mapFull));
+      hasMore = page.products.pageInfo.hasNextPage;
+      cursor = page.products.pageInfo.endCursor ?? null;
+      if (!cursor) hasMore = false;
+    }
 
-    return {
-      shop: data.shop,
-      locations,
-      selectedLocationId,
-      products,
-      summary: {
-        productCount: products.length,
-        variantCount: products.reduce((total, product) => total + product.variants.length, 0),
-        inventoryUnits: products.reduce((total, product) => total + product.totalInventory, 0)
-      }
-    };
+    return { shop, locations, selectedLocationId, products: allProducts, summary: buildSummary(allProducts) };
+
   } catch (error) {
-    const fallback = await executeGraphQL<{
-      shop: ShopSummary;
-      products: {
-        nodes: Array<{
-          id: string;
-          title: string;
-          handle: string;
-          status: string;
-          vendor: string | null;
-          productType: string | null;
-          tags: string[];
-          totalInventory: number | null;
-          updatedAt: string;
-          featuredImage: {
-            url: string;
-            altText: string | null;
-          } | null;
-          variants: {
-            nodes: Array<{
-              id: string;
-              title: string;
-              barcode: string | null;
-              price: string | null;
-              inventoryQuantity: number | null;
-              inventoryItem: {
-                id: string;
-                sku: string | null;
-                tracked: boolean | null;
-              };
-            }>;
-          };
-        }>;
-      };
-    }>(
-      admin,
-      `#graphql
-        query InventoryDashboardFallback($query: String!) {
-          shop {
-            name
-            myshopifyDomain
-            currencyCode
-          }
-          products(first: 40, sortKey: UPDATED_AT, reverse: true, query: $query) {
-            nodes {
-              id
-              title
-              handle
-              status
-              vendor
-              productType
-              tags
-              totalInventory
-              updatedAt
-              featuredImage {
-                url
-                altText
-              }
-              variants(first: 20) {
+    // ── Fallback: simpler query without metafields/cost (paginated) ───────────
+    try {
+      const allProducts: InventoryProduct[] = [];
+      let shop: ShopSummary | null = null;
+      let cursor: string | null = null;
+      let hasMore = true;
+
+      while (hasMore) {
+        const page: FallbackPageResult = await executeGraphQL<FallbackPageResult>(
+          admin,
+          `#graphql
+            query InventoryDashboardFallback($query: String!, $cursor: String) {
+              shop { name myshopifyDomain currencyCode }
+              products(first: 40, after: $cursor, sortKey: UPDATED_AT, reverse: true, query: $query) {
                 nodes {
-                  id
-                  title
-                  barcode
-                  price
-                  inventoryQuantity
-                  inventoryItem {
-                    id
-                    sku
-                    tracked
+                  id title handle status vendor productType tags totalInventory updatedAt
+                  featuredImage { url altText }
+                  variants(first: 20) {
+                    nodes {
+                      id title barcode price inventoryQuantity
+                      inventoryItem { id sku tracked }
+                    }
                   }
                 }
+                pageInfo { hasNextPage endCursor }
               }
             }
-          }
-        }
-      `,
-      {
-        query: searchQuery.trim()
-      }
-    );
+          `,
+          { query: searchQuery.trim(), cursor }
+        );
 
-    const products = fallback.products.nodes.map<InventoryProduct>((product) => ({
-      id: product.id,
-      title: product.title,
-      handle: product.handle,
-      status: product.status,
-      vendor: product.vendor ?? "",
-      productType: product.productType ?? "",
-      tags: product.tags ?? [],
-      totalInventory: product.totalInventory ?? 0,
-      updatedAt: product.updatedAt,
-      imageUrl: product.featuredImage?.url ?? null,
-      imageAlt: product.featuredImage?.altText ?? null,
-      variants: product.variants.nodes.map((variant) => ({
-        id: variant.id,
-        title: variant.title,
-        sku: variant.inventoryItem?.sku ?? "",
-        barcode: variant.barcode ?? "",
-        price: variant.price ?? "0.00",
-        compareAtPrice: "",
-        wholesalePrice: "",
-        cost: "",
-        inventoryQuantity: variant.inventoryQuantity ?? 0,
-        inventoryItemId: variant.inventoryItem.id,
-        tracked: Boolean(variant.inventoryItem.tracked),
-        inventoryLevels: []
-      }))
-    }));
-
-    return {
-      shop: fallback.shop,
-      locations: [],
-      selectedLocationId: "",
-      products,
-      loadWarning:
-        error instanceof Error
-          ? `Some advanced inventory features failed to load: ${error.message}`
-          : "Some advanced inventory features failed to load.",
-      summary: {
-        productCount: products.length,
-        variantCount: products.reduce((total, product) => total + product.variants.length, 0),
-        inventoryUnits: products.reduce((total, product) => total + product.totalInventory, 0)
+        if (!shop) shop = page.shop;
+        allProducts.push(...page.products.nodes.map(mapFallback));
+        hasMore = page.products.pageInfo.hasNextPage;
+        cursor = page.products.pageInfo.endCursor ?? null;
+        if (!cursor) hasMore = false;
       }
-    };
+
+      return {
+        shop,
+        locations: [],
+        selectedLocationId: "",
+        products: allProducts,
+        loadWarning:
+          error instanceof Error
+            ? `Some advanced inventory features failed to load: ${error.message}`
+            : "Some advanced inventory features failed to load.",
+        summary: buildSummary(allProducts),
+      };
+    } catch {
+      return {
+        shop: null, locations: [], selectedLocationId: "",
+        products: [],
+        loadWarning: "Failed to load products. Please refresh.",
+        summary: { productCount: 0, variantCount: 0, inventoryUnits: 0 },
+      };
+    }
   }
 }
 
