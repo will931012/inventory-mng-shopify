@@ -1514,6 +1514,96 @@ export function normalizeExcelWorkbook(
   return applySupplierMapping(allRecords, mapping, rules);
 }
 
+// ─── Product Images ───────────────────────────────────────────────────────────
+
+export async function attachProductImages(
+  admin: AdminClient,
+  productId: string,
+  images: Array<{ url: string; alt: string }>
+): Promise<void> {
+  const media = images.map((img) => ({
+    originalSource: img.url,
+    alt: img.alt,
+    mediaContentType: "IMAGE",
+  }));
+
+  const res = await admin.graphql(
+    `mutation productCreateMedia($productId: ID!, $media: [CreateMediaInput!]!) {
+      productCreateMedia(productId: $productId, media: $media) {
+        mediaUserErrors { field message }
+      }
+    }`,
+    { variables: { productId, media } }
+  );
+
+  const json = (await res.json()) as {
+    data?: { productCreateMedia?: { mediaUserErrors?: UserError[] } };
+    errors?: GraphQLError[];
+  };
+
+  const gqlErrors = json.errors ?? [];
+  if (gqlErrors.length > 0) throw new Error(gqlErrors.map((e) => e.message).join("; "));
+
+  const userErrors = json.data?.productCreateMedia?.mediaUserErrors ?? [];
+  if (userErrors.length > 0) throw new Error(userErrors.map((e) => e.message).join("; "));
+}
+
+export async function fetchProductImages(
+  admin: AdminClient,
+  productId: string
+): Promise<Array<{ id: string; url: string; alt: string }>> {
+  const res = await admin.graphql(
+    `query productMedia($id: ID!) {
+      product(id: $id) {
+        media(first: 50) {
+          nodes {
+            ... on MediaImage {
+              id
+              image { url altText }
+            }
+          }
+        }
+      }
+    }`,
+    { variables: { id: productId } }
+  );
+
+  const json = (await res.json()) as {
+    data?: {
+      product?: {
+        media?: { nodes?: Array<{ id?: string; image?: { url?: string; altText?: string | null } }> };
+      };
+    };
+  };
+
+  return (json.data?.product?.media?.nodes ?? [])
+    .filter((n) => n.id && n.image?.url)
+    .map((n) => ({ id: n.id!, url: n.image!.url!, alt: n.image!.altText ?? "" }));
+}
+
+export async function deleteProductImage(
+  admin: AdminClient,
+  productId: string,
+  mediaId: string
+): Promise<void> {
+  const res = await admin.graphql(
+    `mutation productDeleteMedia($productId: ID!, $mediaIds: [ID!]!) {
+      productDeleteMedia(productId: $productId, mediaIds: $mediaIds) {
+        userErrors { field message }
+      }
+    }`,
+    { variables: { productId, mediaIds: [mediaId] } }
+  );
+
+  const json = (await res.json()) as {
+    data?: { productDeleteMedia?: { userErrors?: UserError[] } };
+    errors?: GraphQLError[];
+  };
+
+  const gqlErrors = json.errors ?? [];
+  if (gqlErrors.length > 0) throw new Error(gqlErrors.map((e) => e.message).join("; "));
+}
+
 export function buildNormalizedCsv(groups: ProductGroupInput[]) {
   // Matches the official Shopify product CSV import template column order
   const header = [

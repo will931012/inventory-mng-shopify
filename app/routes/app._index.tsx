@@ -5,14 +5,17 @@ import React, { useState, useRef } from "react";
 import type { CSSProperties } from "react";
 
 import {
+  attachProductImages,
   buildInventoryCsv,
   buildNormalizedCsv,
   createProduct,
   createProductGroup,
   csvTemplate,
+  deleteProductImage,
   deleteProducts,
   fetchAllProductIdsWithZeroPrice,
   fetchInventoryDashboard,
+  fetchProductImages,
   getExcelInfo,
   importProductsFromCsv,
   normalizeExcelWorkbook,
@@ -23,16 +26,20 @@ import {
 import type { ExcelInfo, ProductGroupInput, SupplierColumnMapping, SupplierPricingRules } from "../inventory.server";
 import { authenticate } from "../shopify.server";
 
+type ProductImageEntry = { id: string; url: string; alt: string };
+
 type ActionData =
   | { ok: boolean; message: string; errors?: string[] }
   | ExcelInfo
-  | { preview: true; products: ProductGroupInput[] };
+  | { preview: true; products: ProductGroupInput[] }
+  | { images: ProductImageEntry[] };
 
 const tabs = [
   { id: "overview",   label: "Overview",   icon: "📊" },
   { id: "catalog",    label: "Catalog",    icon: "🗂️"  },
   { id: "imports",    label: "Import",     icon: "📥"  },
   { id: "supplier",   label: "Supplier",   icon: "📦"  },
+  { id: "images",     label: "Images",     icon: "🖼️"  },
   { id: "operations", label: "Operations", icon: "⚙️"  },
 ] as const;
 
@@ -336,6 +343,32 @@ export async function action({ request }: ActionFunctionArgs) {
       });
     }
 
+    if (intent === "attach-images") {
+      const productId = String(formData.get("productId") ?? "").trim();
+      if (!productId) throw new Error("Select a product.");
+      const urls = formData.getAll("imageUrl").map(String).filter(Boolean);
+      const alts = formData.getAll("imageAlt").map(String);
+      if (!urls.length) throw new Error("Add at least one image URL.");
+      const images = urls.map((url, i) => ({ url, alt: alts[i] ?? "" }));
+      await attachProductImages(admin, productId, images);
+      return json<ActionData>({ ok: true, message: `${images.length} image(s) added successfully.` });
+    }
+
+    if (intent === "delete-image") {
+      const productId = String(formData.get("productId") ?? "").trim();
+      const mediaId = String(formData.get("mediaId") ?? "").trim();
+      if (!productId || !mediaId) throw new Error("Missing product or media ID.");
+      await deleteProductImage(admin, productId, mediaId);
+      return json<ActionData>({ ok: true, message: "Image deleted." });
+    }
+
+    if (intent === "fetch-product-images") {
+      const productId = String(formData.get("productId") ?? "").trim();
+      if (!productId) throw new Error("Select a product.");
+      const images = await fetchProductImages(admin, productId);
+      return json({ images });
+    }
+
     return json<ActionData>({ ok: false, message: "Unknown action." });
   } catch (error) {
     return json<ActionData>({ ok: false, message: error instanceof Error ? error.message : "An unexpected error occurred." }, { status: 400 });
@@ -514,6 +547,10 @@ export default function AppDashboard() {
 
         {activeView === "supplier" && (
           <SupplierPanel selectedLocationId={data.selectedLocationId} isSubmitting={isSubmitting} />
+        )}
+
+        {activeView === "images" && (
+          <ImagesTab products={data.products} />
         )}
 
         {activeView === "operations" && (
@@ -1614,5 +1651,216 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
         )}
       </Form>
     </article>
+  );
+}
+
+// ─── Images tab ───────────────────────────────────────────────────────────────
+
+function ImagesTab({ products }: { products: Array<{ id: string; title: string; imageUrl: string | null }> }) {
+  const fetcher = useFetcher<{ images?: ProductImageEntry[] } | { ok: boolean; message: string }>();
+  const attachFetcher = useFetcher<{ ok: boolean; message: string }>();
+  const deleteFetcher = useFetcher<{ ok: boolean; message: string }>();
+
+  const [selectedProductId, setSelectedProductId] = useState("");
+  const [search, setSearch] = useState("");
+  const [rows, setRows] = useState([{ url: "", alt: "" }]);
+
+  // Images fetched for the selected product
+  const fetchedImages: ProductImageEntry[] =
+    fetcher.data && "images" in fetcher.data ? fetcher.data.images ?? [] : [];
+
+  const isLoading = fetcher.state !== "idle";
+  const isAttaching = attachFetcher.state !== "idle";
+
+  function handleProductChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    const id = e.target.value;
+    setSelectedProductId(id);
+    if (id) {
+      const fd = new FormData();
+      fd.append("intent", "fetch-product-images");
+      fd.append("productId", id);
+      fetcher.submit(fd, { method: "post" });
+    }
+  }
+
+  function addRow() { setRows((r) => [...r, { url: "", alt: "" }]); }
+  function removeRow(i: number) { setRows((r) => r.filter((_, idx) => idx !== i)); }
+  function updateRow(i: number, field: "url" | "alt", value: string) {
+    setRows((r) => r.map((row, idx) => idx === i ? { ...row, [field]: value } : row));
+  }
+
+  const filtered = search.trim()
+    ? products.filter((p) => p.title.toLowerCase().includes(search.toLowerCase()))
+    : products;
+
+  const selectedProduct = products.find((p) => p.id === selectedProductId);
+
+  // Reset rows after successful attach
+  const prevAttachState = React.useRef(attachFetcher.state);
+  React.useEffect(() => {
+    if (prevAttachState.current === "submitting" && attachFetcher.state === "idle") {
+      if (attachFetcher.data && "ok" in attachFetcher.data && attachFetcher.data.ok) {
+        setRows([{ url: "", alt: "" }]);
+        // Refresh images
+        if (selectedProductId) {
+          const fd = new FormData();
+          fd.append("intent", "fetch-product-images");
+          fd.append("productId", selectedProductId);
+          fetcher.submit(fd, { method: "post" });
+        }
+      }
+    }
+    prevAttachState.current = attachFetcher.state;
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+
+      {/* Feedback banners */}
+      {attachFetcher.data && "ok" in attachFetcher.data && (
+        <Banner ok={attachFetcher.data.ok} message={attachFetcher.data.message} />
+      )}
+      {deleteFetcher.data && "ok" in deleteFetcher.data && (
+        <Banner ok={deleteFetcher.data.ok} message={deleteFetcher.data.message} />
+      )}
+
+      {/* Product selector */}
+      <article style={panelStyle}>
+        <h2 style={{ margin: "0 0 1rem", fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>
+          1. Select product
+        </h2>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.6rem", alignItems: "end" }}>
+          <Field label="Search products">
+            <input
+              type="text"
+              placeholder="Filter by title…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              style={inputStyle}
+            />
+          </Field>
+          <div />
+        </div>
+        <div style={{ marginTop: "0.75rem" }}>
+          <Field label="Product">
+            <select
+              value={selectedProductId}
+              onChange={handleProductChange}
+              style={{ ...inputStyle, maxWidth: "600px" }}
+            >
+              <option value="">— Select a product —</option>
+              {filtered.map((p) => (
+                <option key={p.id} value={p.id}>{p.title}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+      </article>
+
+      {/* Current images */}
+      {selectedProductId && (
+        <article style={panelStyle}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+            <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>
+              2. Current images — {selectedProduct?.title}
+            </h2>
+            {isLoading && <span style={{ fontSize: "12px", color: "#64748b" }}>Loading…</span>}
+          </div>
+
+          {fetchedImages.length === 0 && !isLoading && (
+            <p style={{ margin: 0, fontSize: "13px", color: "#94a3b8" }}>No images yet.</p>
+          )}
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
+            {fetchedImages.map((img) => (
+              <div key={img.id} style={{
+                position: "relative", borderRadius: "8px", overflow: "hidden",
+                border: "1px solid #e2e8f0", width: "120px",
+              }}>
+                <img src={img.url} alt={img.alt} style={{ width: "120px", height: "120px", objectFit: "cover", display: "block" }} />
+                {img.alt && (
+                  <div style={{
+                    padding: "0.3rem 0.4rem", fontSize: "10px", color: "#64748b",
+                    background: "#f8fafc", borderTop: "1px solid #e2e8f0",
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  }}>{img.alt}</div>
+                )}
+                <deleteFetcher.Form method="post" style={{ position: "absolute", top: "4px", right: "4px" }}>
+                  <input type="hidden" name="intent" value="delete-image" />
+                  <input type="hidden" name="productId" value={selectedProductId} />
+                  <input type="hidden" name="mediaId" value={img.id} />
+                  <button
+                    type="submit"
+                    onClick={(e) => { if (!window.confirm("Delete this image?")) e.preventDefault(); }}
+                    title="Delete image"
+                    style={{
+                      width: "22px", height: "22px", borderRadius: "50%",
+                      background: "rgba(220,38,38,0.85)", color: "#fff",
+                      border: "none", cursor: "pointer", fontSize: "12px", lineHeight: 1,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}
+                  >✕</button>
+                </deleteFetcher.Form>
+              </div>
+            ))}
+          </div>
+        </article>
+      )}
+
+      {/* Add images */}
+      {selectedProductId && (
+        <article style={panelStyle}>
+          <h2 style={{ margin: "0 0 1rem", fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>
+            3. Add images by URL
+          </h2>
+
+          <attachFetcher.Form method="post">
+            <input type="hidden" name="intent" value="attach-images" />
+            <input type="hidden" name="productId" value={selectedProductId} />
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginBottom: "1rem" }}>
+              {rows.map((row, i) => (
+                <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 220px auto", gap: "0.5rem", alignItems: "end" }}>
+                  <Field label={i === 0 ? "Image URL" : ""}>
+                    <input
+                      type="url"
+                      name="imageUrl"
+                      value={row.url}
+                      onChange={(e) => updateRow(i, "url", e.target.value)}
+                      placeholder="https://example.com/image.jpg"
+                      style={inputStyle}
+                    />
+                  </Field>
+                  <Field label={i === 0 ? "Alt text (optional)" : ""}>
+                    <input
+                      type="text"
+                      name="imageAlt"
+                      value={row.alt}
+                      onChange={(e) => updateRow(i, "alt", e.target.value)}
+                      placeholder="Description…"
+                      style={inputStyle}
+                    />
+                  </Field>
+                  {rows.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => removeRow(i)}
+                      style={{ ...darkButton, background: "#fef2f2", color: "#dc2626", borderColor: "#fecaca", padding: "0.55rem 0.65rem" }}
+                    >✕</button>
+                  ) : <div />}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+              <button type="button" onClick={addRow} style={darkButton}>+ Add row</button>
+              <button type="submit" disabled={isAttaching} style={primaryButton}>
+                {isAttaching ? "Uploading…" : `↑ Add ${rows.filter((r) => r.url).length || ""} image(s)`}
+              </button>
+            </div>
+          </attachFetcher.Form>
+        </article>
+      )}
+    </div>
   );
 }
