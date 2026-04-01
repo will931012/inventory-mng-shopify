@@ -10,12 +10,14 @@ import {
   buildNormalizedCsv,
   createProduct,
   createProductGroup,
+  createStagedUpload,
   csvTemplate,
   deleteProductImage,
   deleteProducts,
   fetchAllProductIdsWithZeroPrice,
   fetchInventoryDashboard,
   fetchProductImages,
+  fetchProductsWithoutImages,
   getExcelInfo,
   importProductsFromCsv,
   normalizeExcelWorkbook,
@@ -23,16 +25,20 @@ import {
   updateProductRecord,
   updateVariantInventory
 } from "../inventory.server";
-import type { ExcelInfo, ProductGroupInput, SupplierColumnMapping, SupplierPricingRules } from "../inventory.server";
+import type { ExcelInfo, NoImageProduct, ProductGroupInput, SupplierColumnMapping, SupplierPricingRules } from "../inventory.server";
 import { authenticate } from "../shopify.server";
 
 type ProductImageEntry = { id: string; url: string; alt: string };
+
+type StagedTarget = { url: string; resourceUrl: string; parameters: Array<{ name: string; value: string }> };
 
 type ActionData =
   | { ok: boolean; message: string; errors?: string[] }
   | ExcelInfo
   | { preview: true; products: ProductGroupInput[] }
-  | { images: ProductImageEntry[] };
+  | { images: ProductImageEntry[] }
+  | { noImageProducts: NoImageProduct[] }
+  | { stagedUpload: StagedTarget };
 
 const tabs = [
   { id: "overview",   label: "Overview",   icon: "📊" },
@@ -341,6 +347,19 @@ export async function action({ request }: ActionFunctionArgs) {
         message: `Supplier import complete. ${createdCount} product(s) created.`,
         errors: importErrors
       });
+    }
+
+    if (intent === "load-no-image-products") {
+      const products = await fetchProductsWithoutImages(admin);
+      return json({ noImageProducts: products });
+    }
+
+    if (intent === "create-staged-upload") {
+      const filename = String(formData.get("filename") ?? "image.jpg");
+      const mimeType = String(formData.get("mimeType") ?? "image/jpeg");
+      const fileSize = parseInt(String(formData.get("fileSize") ?? "0"), 10);
+      const target = await createStagedUpload(admin, filename, mimeType, fileSize);
+      return json({ stagedUpload: target });
     }
 
     if (intent === "attach-images") {
@@ -1657,7 +1676,345 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
 // ─── Images tab ───────────────────────────────────────────────────────────────
 
 function ImagesTab({ products }: { products: Array<{ id: string; title: string; imageUrl: string | null }> }) {
-  const fetcher = useFetcher<{ images?: ProductImageEntry[] } | { ok: boolean; message: string }>();
+  const [mode, setMode] = useState<"assign" | "manage">("assign");
+
+  const modeBtn = (active: boolean): CSSProperties => ({
+    ...darkButton,
+    ...(active ? { background: "#0f172a", color: "#fff", borderColor: "#0f172a" } : {}),
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+      <div style={{ display: "flex", gap: "0.5rem" }}>
+        <button type="button" onClick={() => setMode("assign")} style={modeBtn(mode === "assign")}>
+          ⚡ Quick Assign
+        </button>
+        <button type="button" onClick={() => setMode("manage")} style={modeBtn(mode === "manage")}>
+          🖼️ Manage Images
+        </button>
+      </div>
+
+      {mode === "assign" && <QuickAssignPanel />}
+      {mode === "manage" && <ManageImagesPanel products={products} />}
+    </div>
+  );
+}
+
+// ── Quick Assign ──────────────────────────────────────────────────────────────
+
+type UploadPhase =
+  | { status: "idle" }
+  | { status: "staging"; file: File }
+  | { status: "uploading"; file: File; resourceUrl: string }
+  | { status: "attaching"; resourceUrl: string }
+  | { status: "error"; message: string };
+
+function QuickAssignPanel() {
+  const loadFetcher   = useFetcher<{ noImageProducts?: NoImageProduct[] }>();
+  const stageFetcher  = useFetcher<{ stagedUpload?: StagedTarget }>();
+  const attachFetcher = useFetcher<{ ok: boolean; message: string }>();
+
+  const [queue, setQueue] = useState<NoImageProduct[]>([]);
+  const [phase, setPhase]  = useState<UploadPhase>({ status: "idle" });
+  const [dragOver, setDragOver] = useState(false);
+  const attachSubmitted = React.useRef(false);
+  const prevAttachState = React.useRef(attachFetcher.state);
+
+  const current = queue[0] ?? null;
+  const loaded  = loadFetcher.data && "noImageProducts" in loadFetcher.data;
+  const isLoadingQueue = loadFetcher.state !== "idle";
+
+  // Load queue on mount
+  React.useEffect(() => {
+    const fd = new FormData();
+    fd.append("intent", "load-no-image-products");
+    loadFetcher.submit(fd, { method: "post" });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // When loadFetcher returns, populate queue
+  React.useEffect(() => {
+    if (loadFetcher.state === "idle" && loadFetcher.data && "noImageProducts" in loadFetcher.data) {
+      setQueue(loadFetcher.data.noImageProducts ?? []);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadFetcher.state]);
+
+  // When staged upload is ready → upload file to CDN
+  React.useEffect(() => {
+    if (
+      phase.status === "staging" &&
+      stageFetcher.state === "idle" &&
+      stageFetcher.data?.stagedUpload
+    ) {
+      const { url, resourceUrl, parameters } = stageFetcher.data.stagedUpload;
+      const { file } = phase;
+      setPhase({ status: "uploading", file, resourceUrl });
+
+      const fd = new FormData();
+      parameters.forEach(({ name, value }) => fd.append(name, value));
+      fd.append("file", file);
+
+      fetch(url, { method: "POST", body: fd })
+        .then(() => setPhase({ status: "attaching", resourceUrl }))
+        .catch((e) => setPhase({ status: "error", message: String(e) }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageFetcher.state, stageFetcher.data]);
+
+  // When attaching phase → submit to Shopify once
+  React.useEffect(() => {
+    if (phase.status === "attaching" && current && !attachSubmitted.current) {
+      attachSubmitted.current = true;
+      const fd = new FormData();
+      fd.append("intent", "attach-images");
+      fd.append("productId", current.id);
+      fd.append("imageUrl", phase.resourceUrl);
+      fd.append("imageAlt", current.title);
+      attachFetcher.submit(fd, { method: "post" });
+    }
+    if (phase.status !== "attaching") attachSubmitted.current = false;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase.status]);
+
+  // When attach completes → advance queue
+  React.useEffect(() => {
+    if (prevAttachState.current !== "idle" && attachFetcher.state === "idle") {
+      if (attachFetcher.data?.ok) {
+        setQueue((q) => q.slice(1));
+        setPhase({ status: "idle" });
+      } else if (attachFetcher.data && !attachFetcher.data.ok) {
+        setPhase({ status: "error", message: attachFetcher.data.message });
+      }
+    }
+    prevAttachState.current = attachFetcher.state;
+  });
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragOver(false);
+    if (!current) return;
+    const file = e.dataTransfer.files[0];
+    if (!file || !file.type.startsWith("image/")) {
+      setPhase({ status: "error", message: "Only image files are accepted." });
+      return;
+    }
+    setPhase({ status: "staging", file });
+    const fd = new FormData();
+    fd.append("intent", "create-staged-upload");
+    fd.append("filename", file.name);
+    fd.append("mimeType", file.type);
+    fd.append("fileSize", String(file.size));
+    stageFetcher.submit(fd, { method: "post" });
+  }
+
+  function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!current) return;
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPhase({ status: "staging", file });
+    const fd = new FormData();
+    fd.append("intent", "create-staged-upload");
+    fd.append("filename", file.name);
+    fd.append("mimeType", file.type);
+    fd.append("fileSize", String(file.size));
+    stageFetcher.submit(fd, { method: "post" });
+    e.target.value = "";
+  }
+
+  function skip() {
+    if (!current) return;
+    setQueue((q) => q.slice(1));
+    setPhase({ status: "idle" });
+  }
+
+  const isBusy = phase.status !== "idle" && phase.status !== "error";
+
+  const phaseLabel: Record<UploadPhase["status"], string> = {
+    idle:      "",
+    staging:   "Creating upload slot…",
+    uploading: "Uploading image…",
+    attaching: "Attaching to product…",
+    error:     "",
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: "680px" }}>
+
+      {/* Progress bar */}
+      <article style={panelStyle}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>
+              Products without images
+            </h2>
+            <p style={{ margin: "0.2rem 0 0", fontSize: "12px", color: "#64748b" }}>
+              {isLoadingQueue ? "Loading…" : loaded ? `${queue.length} remaining · sorted by UPC priority` : ""}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const fd = new FormData();
+              fd.append("intent", "load-no-image-products");
+              loadFetcher.submit(fd, { method: "post" });
+            }}
+            style={darkButton}
+            disabled={isLoadingQueue}
+          >
+            ↺ Refresh
+          </button>
+        </div>
+
+        {loaded && queue.length > 0 && (
+          <div style={{ marginTop: "0.85rem", height: "6px", borderRadius: "3px", background: "#e2e8f0", overflow: "hidden" }}>
+            <div style={{
+              height: "100%",
+              background: "linear-gradient(90deg, #2563eb, #4f46e5)",
+              borderRadius: "3px",
+              width: `${Math.max(4, 100 - (queue.length / ((loadFetcher.data as any)?.noImageProducts?.length || queue.length)) * 100)}%`,
+              transition: "width 0.4s ease",
+            }} />
+          </div>
+        )}
+      </article>
+
+      {/* Done state */}
+      {loaded && queue.length === 0 && (
+        <article style={{ ...panelStyle, textAlign: "center", padding: "2.5rem" }}>
+          <div style={{ fontSize: "40px", marginBottom: "0.75rem" }}>🎉</div>
+          <strong style={{ fontSize: "15px", color: "#0f172a" }}>All products have images!</strong>
+          <p style={{ margin: "0.4rem 0 0", fontSize: "13px", color: "#64748b" }}>
+            Every product in your catalog has at least one image.
+          </p>
+        </article>
+      )}
+
+      {/* Current product card + drop zone */}
+      {current && (
+        <article style={panelStyle}>
+          {/* Product info */}
+          <div style={{ marginBottom: "1.25rem" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "#0f172a", lineHeight: 1.3 }}>
+                  {current.title}
+                </h3>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+                  {current.barcode && (
+                    <span style={{
+                      fontSize: "11px", fontWeight: 600, padding: "0.2rem 0.55rem",
+                      background: "#eff6ff", color: "#1d4ed8", borderRadius: "5px",
+                      border: "1px solid #bfdbfe",
+                    }}>UPC: {current.barcode}</span>
+                  )}
+                  {current.sku && (
+                    <span style={{
+                      fontSize: "11px", padding: "0.2rem 0.55rem",
+                      background: "#f8fafc", color: "#475569", borderRadius: "5px",
+                      border: "1px solid #e2e8f0",
+                    }}>SKU: {current.sku}</span>
+                  )}
+                  {current.vendor && (
+                    <span style={{
+                      fontSize: "11px", padding: "0.2rem 0.55rem",
+                      background: "#f8fafc", color: "#475569", borderRadius: "5px",
+                      border: "1px solid #e2e8f0",
+                    }}>{current.vendor}</span>
+                  )}
+                  {current.productType && (
+                    <span style={{
+                      fontSize: "11px", padding: "0.2rem 0.55rem",
+                      background: "#f8fafc", color: "#475569", borderRadius: "5px",
+                      border: "1px solid #e2e8f0",
+                    }}>{current.productType}</span>
+                  )}
+                </div>
+              </div>
+              <button type="button" onClick={skip} disabled={isBusy} style={darkButton}>
+                Skip →
+              </button>
+            </div>
+          </div>
+
+          {/* Status message */}
+          {phase.status === "error" && (
+            <div style={{
+              padding: "0.65rem 0.85rem", borderRadius: "8px", marginBottom: "1rem",
+              background: "#fef2f2", border: "1px solid #fca5a5", color: "#991b1b", fontSize: "13px",
+            }}>
+              {phase.message}
+              <button type="button" onClick={() => setPhase({ status: "idle" })}
+                style={{ marginLeft: "0.75rem", fontSize: "11px", color: "#dc2626", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {/* Drop zone */}
+          <label
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            style={{
+              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+              gap: "0.75rem", padding: "2.5rem 1rem", borderRadius: "12px", cursor: isBusy ? "default" : "pointer",
+              border: `2px dashed ${dragOver ? "#2563eb" : isBusy ? "#c7d2fe" : "#cbd5e1"}`,
+              background: dragOver ? "#eff6ff" : isBusy ? "#f5f3ff" : "#f8fafc",
+              transition: "all 0.15s", minHeight: "180px",
+            }}
+          >
+            {isBusy ? (
+              <>
+                <div style={{
+                  width: "36px", height: "36px", borderRadius: "50%",
+                  border: "3px solid #e0e7ff", borderTopColor: "#4f46e5",
+                  animation: "spin 0.8s linear infinite",
+                }} />
+                <span style={{ fontSize: "13px", color: "#6d28d9", fontWeight: 600 }}>
+                  {phaseLabel[phase.status]}
+                </span>
+                {"file" in phase && (
+                  <span style={{ fontSize: "11px", color: "#94a3b8" }}>{(phase as { file: File }).file.name}</span>
+                )}
+              </>
+            ) : (
+              <>
+                <div style={{
+                  width: "48px", height: "48px", borderRadius: "12px",
+                  background: dragOver ? "#dbeafe" : "#f1f5f9",
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: "22px",
+                }}>🖼️</div>
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: "13px", fontWeight: 600, color: "#374151" }}>
+                    {dragOver ? "Drop the image" : "Drag & drop an image here"}
+                  </div>
+                  <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "0.25rem" }}>
+                    or click to browse files
+                  </div>
+                </div>
+              </>
+            )}
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleFileInput}
+              disabled={isBusy}
+              style={{ display: "none" }}
+            />
+          </label>
+
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </article>
+      )}
+    </div>
+  );
+}
+
+// ── Manage Images ─────────────────────────────────────────────────────────────
+
+function ManageImagesPanel({ products }: { products: Array<{ id: string; title: string; imageUrl: string | null }> }) {
+  const fetcher       = useFetcher<{ images?: ProductImageEntry[] }>();
   const attachFetcher = useFetcher<{ ok: boolean; message: string }>();
   const deleteFetcher = useFetcher<{ ok: boolean; message: string }>();
 
@@ -1665,11 +2022,10 @@ function ImagesTab({ products }: { products: Array<{ id: string; title: string; 
   const [search, setSearch] = useState("");
   const [rows, setRows] = useState([{ url: "", alt: "" }]);
 
-  // Images fetched for the selected product
   const fetchedImages: ProductImageEntry[] =
-    fetcher.data && "images" in fetcher.data ? fetcher.data.images ?? [] : [];
+    fetcher.data?.images ?? [];
 
-  const isLoading = fetcher.state !== "idle";
+  const isLoading   = fetcher.state !== "idle";
   const isAttaching = attachFetcher.state !== "idle";
 
   function handleProductChange(e: React.ChangeEvent<HTMLSelectElement>) {
@@ -1695,19 +2051,15 @@ function ImagesTab({ products }: { products: Array<{ id: string; title: string; 
 
   const selectedProduct = products.find((p) => p.id === selectedProductId);
 
-  // Reset rows after successful attach
   const prevAttachState = React.useRef(attachFetcher.state);
   React.useEffect(() => {
     if (prevAttachState.current === "submitting" && attachFetcher.state === "idle") {
-      if (attachFetcher.data && "ok" in attachFetcher.data && attachFetcher.data.ok) {
+      if (attachFetcher.data?.ok && selectedProductId) {
         setRows([{ url: "", alt: "" }]);
-        // Refresh images
-        if (selectedProductId) {
-          const fd = new FormData();
-          fd.append("intent", "fetch-product-images");
-          fd.append("productId", selectedProductId);
-          fetcher.submit(fd, { method: "post" });
-        }
+        const fd = new FormData();
+        fd.append("intent", "fetch-product-images");
+        fd.append("productId", selectedProductId);
+        fetcher.submit(fd, { method: "post" });
       }
     }
     prevAttachState.current = attachFetcher.state;
@@ -1716,7 +2068,6 @@ function ImagesTab({ products }: { products: Array<{ id: string; title: string; 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
 
-      {/* Feedback banners */}
       {attachFetcher.data && "ok" in attachFetcher.data && (
         <Banner ok={attachFetcher.data.ok} message={attachFetcher.data.message} />
       )}
@@ -1729,28 +2080,17 @@ function ImagesTab({ products }: { products: Array<{ id: string; title: string; 
         <h2 style={{ margin: "0 0 1rem", fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>
           1. Select product
         </h2>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.6rem", alignItems: "end" }}>
-          <Field label="Search products">
-            <input
-              type="text"
-              placeholder="Filter by title…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              style={inputStyle}
-            />
-          </Field>
-          <div />
-        </div>
+        <Field label="Filter">
+          <input type="text" placeholder="Search by title…" value={search}
+            onChange={(e) => setSearch(e.target.value)} style={{ ...inputStyle, maxWidth: "400px" }} />
+        </Field>
         <div style={{ marginTop: "0.75rem" }}>
           <Field label="Product">
-            <select
-              value={selectedProductId}
-              onChange={handleProductChange}
-              style={{ ...inputStyle, maxWidth: "600px" }}
-            >
+            <select value={selectedProductId} onChange={handleProductChange}
+              style={{ ...inputStyle, maxWidth: "600px" }}>
               <option value="">— Select a product —</option>
               {filtered.map((p) => (
-                <option key={p.id} value={p.id}>{p.title}</option>
+                <option key={p.id} value={p.id}>{p.title}{!p.imageUrl ? " ⚠ no image" : ""}</option>
               ))}
             </select>
           </Field>
@@ -1762,7 +2102,7 @@ function ImagesTab({ products }: { products: Array<{ id: string; title: string; 
         <article style={panelStyle}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
             <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>
-              2. Current images — {selectedProduct?.title}
+              2. Images — {selectedProduct?.title}
             </h2>
             {isLoading && <span style={{ fontSize: "12px", color: "#64748b" }}>Loading…</span>}
           </div>
@@ -1789,8 +2129,7 @@ function ImagesTab({ products }: { products: Array<{ id: string; title: string; 
                   <input type="hidden" name="intent" value="delete-image" />
                   <input type="hidden" name="productId" value={selectedProductId} />
                   <input type="hidden" name="mediaId" value={img.id} />
-                  <button
-                    type="submit"
+                  <button type="submit"
                     onClick={(e) => { if (!window.confirm("Delete this image?")) e.preventDefault(); }}
                     title="Delete image"
                     style={{
@@ -1807,13 +2146,12 @@ function ImagesTab({ products }: { products: Array<{ id: string; title: string; 
         </article>
       )}
 
-      {/* Add images */}
+      {/* Add images by URL */}
       {selectedProductId && (
         <article style={panelStyle}>
           <h2 style={{ margin: "0 0 1rem", fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>
             3. Add images by URL
           </h2>
-
           <attachFetcher.Form method="post">
             <input type="hidden" name="intent" value="attach-images" />
             <input type="hidden" name="productId" value={selectedProductId} />
@@ -1822,32 +2160,19 @@ function ImagesTab({ products }: { products: Array<{ id: string; title: string; 
               {rows.map((row, i) => (
                 <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 220px auto", gap: "0.5rem", alignItems: "end" }}>
                   <Field label={i === 0 ? "Image URL" : ""}>
-                    <input
-                      type="url"
-                      name="imageUrl"
-                      value={row.url}
+                    <input type="url" name="imageUrl" value={row.url}
                       onChange={(e) => updateRow(i, "url", e.target.value)}
-                      placeholder="https://example.com/image.jpg"
-                      style={inputStyle}
-                    />
+                      placeholder="https://…/image.jpg" style={inputStyle} />
                   </Field>
                   <Field label={i === 0 ? "Alt text (optional)" : ""}>
-                    <input
-                      type="text"
-                      name="imageAlt"
-                      value={row.alt}
+                    <input type="text" name="imageAlt" value={row.alt}
                       onChange={(e) => updateRow(i, "alt", e.target.value)}
-                      placeholder="Description…"
-                      style={inputStyle}
-                    />
+                      placeholder="Description…" style={inputStyle} />
                   </Field>
-                  {rows.length > 1 ? (
-                    <button
-                      type="button"
-                      onClick={() => removeRow(i)}
-                      style={{ ...darkButton, background: "#fef2f2", color: "#dc2626", borderColor: "#fecaca", padding: "0.55rem 0.65rem" }}
-                    >✕</button>
-                  ) : <div />}
+                  {rows.length > 1
+                    ? <button type="button" onClick={() => removeRow(i)}
+                        style={{ ...darkButton, background: "#fef2f2", color: "#dc2626", borderColor: "#fecaca", padding: "0.55rem 0.65rem" }}>✕</button>
+                    : <div />}
                 </div>
               ))}
             </div>
@@ -1855,7 +2180,7 @@ function ImagesTab({ products }: { products: Array<{ id: string; title: string; 
             <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
               <button type="button" onClick={addRow} style={darkButton}>+ Add row</button>
               <button type="submit" disabled={isAttaching} style={primaryButton}>
-                {isAttaching ? "Uploading…" : `↑ Add ${rows.filter((r) => r.url).length || ""} image(s)`}
+                {isAttaching ? "Saving…" : `↑ Add image(s)`}
               </button>
             </div>
           </attachFetcher.Form>

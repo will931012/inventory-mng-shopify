@@ -1514,6 +1514,120 @@ export function normalizeExcelWorkbook(
   return applySupplierMapping(allRecords, mapping, rules);
 }
 
+// ─── Products without images ─────────────────────────────────────────────────
+
+export type NoImageProduct = {
+  id: string;
+  title: string;
+  sku: string;
+  barcode: string;
+  productType: string;
+  vendor: string;
+};
+
+export async function fetchProductsWithoutImages(
+  admin: AdminClient
+): Promise<NoImageProduct[]> {
+  // Fetch up to 250 products; filter client-side for those with no featuredImage
+  const res = await admin.graphql(`
+    query productsNoImage {
+      products(first: 250, sortKey: TITLE) {
+        nodes {
+          id
+          title
+          productType
+          vendor
+          featuredImage { url }
+          variants(first: 1) {
+            nodes { sku barcode }
+          }
+        }
+      }
+    }
+  `);
+
+  type Node = {
+    id: string;
+    title: string;
+    productType: string;
+    vendor: string;
+    featuredImage?: { url: string } | null;
+    variants: { nodes: Array<{ sku: string; barcode: string }> };
+  };
+
+  const json = (await res.json()) as { data?: { products?: { nodes?: Node[] } } };
+  const all = json.data?.products?.nodes ?? [];
+
+  return all
+    .filter((p) => !p.featuredImage)
+    .map((p) => ({
+      id: p.id,
+      title: p.title,
+      productType: p.productType ?? "",
+      vendor: p.vendor ?? "",
+      sku: p.variants.nodes[0]?.sku ?? "",
+      barcode: p.variants.nodes[0]?.barcode ?? "",
+    }))
+    .sort((a, b) => {
+      // Products with barcode (UPC) first
+      if (a.barcode && !b.barcode) return -1;
+      if (!a.barcode && b.barcode) return 1;
+      return a.title.localeCompare(b.title);
+    });
+}
+
+export async function createStagedUpload(
+  admin: AdminClient,
+  filename: string,
+  mimeType: string,
+  fileSize: number
+): Promise<{ url: string; resourceUrl: string; parameters: Array<{ name: string; value: string }> }> {
+  const res = await admin.graphql(
+    `mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+      stagedUploadsCreate(input: $input) {
+        stagedTargets {
+          url
+          resourceUrl
+          parameters { name value }
+        }
+        userErrors { field message }
+      }
+    }`,
+    {
+      variables: {
+        input: [{
+          filename,
+          mimeType,
+          httpMethod: "POST",
+          resource: "IMAGE",
+          fileSize: String(fileSize),
+        }],
+      },
+    }
+  );
+
+  const json = (await res.json()) as {
+    data?: {
+      stagedUploadsCreate?: {
+        stagedTargets?: Array<{ url: string; resourceUrl: string; parameters: Array<{ name: string; value: string }> }>;
+        userErrors?: UserError[];
+      };
+    };
+    errors?: GraphQLError[];
+  };
+
+  const gqlErrors = json.errors ?? [];
+  if (gqlErrors.length > 0) throw new Error(gqlErrors.map((e) => e.message).join("; "));
+
+  const userErrors = json.data?.stagedUploadsCreate?.userErrors ?? [];
+  if (userErrors.length > 0) throw new Error(userErrors.map((e) => e.message).join("; "));
+
+  const target = json.data?.stagedUploadsCreate?.stagedTargets?.[0];
+  if (!target) throw new Error("Staged upload target not returned.");
+
+  return target;
+}
+
 // ─── Product Images ───────────────────────────────────────────────────────────
 
 export async function attachProductImages(
