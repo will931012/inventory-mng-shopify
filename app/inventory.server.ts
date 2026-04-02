@@ -393,7 +393,7 @@ export async function fetchInventoryDashboard(
           unitCost: { amount: string } | null;
           inventoryLevels: {
             nodes: Array<{
-              location: { id: string; name: string };
+              location: { id: string };
               quantities: Array<{ name: string; quantity: number }>;
             }>;
           };
@@ -437,9 +437,10 @@ export async function fetchInventoryDashboard(
         inventoryQuantity: v.inventoryQuantity ?? 0,
         inventoryItemId: v.inventoryItem.id,
         tracked: Boolean(v.inventoryItem.tracked),
+        // Resolve location name from the pre-fetched locations list (avoids read_locations on nested query)
         inventoryLevels: v.inventoryItem.inventoryLevels.nodes.map((lvl) => ({
           locationId: lvl.location.id,
-          locationName: lvl.location.name,
+          locationName: locations.find((l) => l.id === lvl.location.id)?.name ?? lvl.location.id,
           available: lvl.quantities.find((q) => q.name === "available")?.quantity ?? 0,
         })),
       })),
@@ -505,7 +506,7 @@ export async function fetchInventoryDashboard(
                       unitCost { amount }
                       inventoryLevels(first: 20) {
                         nodes {
-                          location { id name }
+                          location { id }
                           quantities(names: ["available"]) { name quantity }
                         }
                       }
