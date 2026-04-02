@@ -1458,25 +1458,6 @@ export type NoImageProduct = {
 export async function fetchProductsWithoutImages(
   admin: AdminClient
 ): Promise<NoImageProduct[]> {
-  // Fetch up to 250 products; filter client-side for those with no featuredImage
-  const res = await admin.graphql(`
-    query productsNoImage {
-      products(first: 250, sortKey: TITLE) {
-        nodes {
-          id
-          title
-          description
-          productType
-          vendor
-          featuredImage { url }
-          variants(first: 1) {
-            nodes { sku barcode }
-          }
-        }
-      }
-    }
-  `);
-
   type Node = {
     id: string;
     title: string;
@@ -1487,26 +1468,65 @@ export async function fetchProductsWithoutImages(
     variants: { nodes: Array<{ sku: string; barcode: string }> };
   };
 
-  const json = (await res.json()) as { data?: { products?: { nodes?: Node[] } } };
-  const all = json.data?.products?.nodes ?? [];
+  type Page = {
+    products: {
+      nodes: Node[];
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    };
+  };
 
-  return all
-    .filter((p) => !p.featuredImage)
-    .map((p) => ({
-      id: p.id,
-      title: p.title,
-      description: p.description ?? "",
-      productType: p.productType ?? "",
-      vendor: p.vendor ?? "",
-      sku: p.variants.nodes[0]?.sku ?? "",
-      barcode: p.variants.nodes[0]?.barcode ?? "",
-    }))
-    .sort((a, b) => {
-      // Products with barcode (UPC) first
-      if (a.barcode && !b.barcode) return -1;
-      if (!a.barcode && b.barcode) return 1;
-      return a.title.localeCompare(b.title);
-    });
+  const result: NoImageProduct[] = [];
+  let cursor: string | null = null;
+  let hasMore = true;
+
+  while (hasMore) {
+    const page: Page = await executeGraphQL<Page>(
+      admin,
+      `#graphql
+        query productsNoImage($cursor: String) {
+          products(first: 250, after: $cursor, sortKey: TITLE) {
+            nodes {
+              id
+              title
+              description
+              productType
+              vendor
+              featuredImage { url }
+              variants(first: 1) {
+                nodes { sku barcode }
+              }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      `,
+      { cursor }
+    );
+
+    for (const p of page.products.nodes) {
+      if (!p.featuredImage) {
+        result.push({
+          id: p.id,
+          title: p.title,
+          description: p.description ?? "",
+          productType: p.productType ?? "",
+          vendor: p.vendor ?? "",
+          sku: p.variants.nodes[0]?.sku ?? "",
+          barcode: p.variants.nodes[0]?.barcode ?? "",
+        });
+      }
+    }
+
+    hasMore = page.products.pageInfo.hasNextPage;
+    cursor = page.products.pageInfo.endCursor ?? null;
+    if (!cursor) hasMore = false;
+  }
+
+  return result.sort((a, b) => {
+    if (a.barcode && !b.barcode) return -1;
+    if (!a.barcode && b.barcode) return 1;
+    return a.title.localeCompare(b.title);
+  });
 }
 
 export async function createStagedUpload(
