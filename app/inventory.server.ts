@@ -1451,6 +1451,7 @@ export type NoImageProduct = {
   barcode: string;
   productType: string;
   vendor: string;
+  description: string;
 };
 
 export async function fetchProductsWithoutImages(
@@ -1463,6 +1464,7 @@ export async function fetchProductsWithoutImages(
         nodes {
           id
           title
+          description
           productType
           vendor
           featuredImage { url }
@@ -1477,6 +1479,7 @@ export async function fetchProductsWithoutImages(
   type Node = {
     id: string;
     title: string;
+    description: string;
     productType: string;
     vendor: string;
     featuredImage?: { url: string } | null;
@@ -1491,6 +1494,7 @@ export async function fetchProductsWithoutImages(
     .map((p) => ({
       id: p.id,
       title: p.title,
+      description: p.description ?? "",
       productType: p.productType ?? "",
       vendor: p.vendor ?? "",
       sku: p.variants.nodes[0]?.sku ?? "",

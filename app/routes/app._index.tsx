@@ -1935,6 +1935,16 @@ function QuickAssignPanel() {
                 Skip →
               </button>
             </div>
+            {current.description && (
+              <p style={{
+                margin: "0.75rem 0 0", fontSize: "12px", color: "#475569",
+                lineHeight: 1.6, borderTop: "1px solid #f1f5f9", paddingTop: "0.75rem",
+                display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}>
+                {current.description}
+              </p>
+            )}
           </div>
 
           {/* Status message */}
