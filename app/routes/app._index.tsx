@@ -1434,7 +1434,7 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
     }
   };
 
-  const toggle = (list: string[], set: React.Dispatch<React.SetStateAction<string[]>>, col: string) => {
+  const toggle = (_list: string[], set: React.Dispatch<React.SetStateAction<string[]>>, col: string) => {
     set((prev) => prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]);
   };
 
@@ -1721,7 +1721,17 @@ async function runUploadJob(
   job: UploadJob,
   updateJob: (id: string, patch: Partial<UploadJob>) => void
 ) {
-  const actionUrl = window.location.href;
+  // Use pathname+search only — avoids hash fragments and is always same-origin
+  const actionUrl = window.location.pathname + window.location.search;
+
+  async function postAction(form: FormData): Promise<unknown> {
+    const res = await fetch(actionUrl, { method: "POST", body: form });
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText);
+      throw new Error(`Server error ${res.status}: ${text.slice(0, 200)}`);
+    }
+    return res.json();
+  }
 
   try {
     // Step 1 — create staged upload slot on Shopify
@@ -1729,11 +1739,12 @@ async function runUploadJob(
     const stageForm = new FormData();
     stageForm.append("intent", "create-staged-upload");
     stageForm.append("filename", job.file.name);
-    stageForm.append("mimeType", job.file.type);
+    stageForm.append("mimeType", job.file.type || "image/jpeg");
     stageForm.append("fileSize", String(job.file.size));
-    const stageRes = await fetch(actionUrl, { method: "POST", body: stageForm });
-    const stageData = (await stageRes.json()) as { stagedUpload?: StagedTarget };
-    if (!stageData.stagedUpload) throw new Error("Staged upload slot not returned.");
+    const stageData = (await postAction(stageForm)) as { stagedUpload?: StagedTarget; message?: string };
+    if (!stageData.stagedUpload) {
+      throw new Error(stageData.message ?? "Staged upload slot not returned.");
+    }
     const { url, resourceUrl, parameters } = stageData.stagedUpload;
 
     // Step 2 — upload file directly to Shopify CDN
@@ -1741,7 +1752,11 @@ async function runUploadJob(
     const cdnForm = new FormData();
     parameters.forEach(({ name, value }) => cdnForm.append(name, value));
     cdnForm.append("file", job.file);
-    await fetch(url, { method: "POST", body: cdnForm });
+    const cdnRes = await fetch(url, { method: "POST", body: cdnForm });
+    if (!cdnRes.ok) {
+      const text = await cdnRes.text().catch(() => cdnRes.statusText);
+      throw new Error(`CDN upload failed ${cdnRes.status}: ${text.slice(0, 200)}`);
+    }
 
     // Step 3 — attach image to product
     updateJob(job.id, { status: "attaching" });
@@ -1750,7 +1765,7 @@ async function runUploadJob(
     attachForm.append("productId", job.productId);
     attachForm.append("imageUrl", resourceUrl);
     attachForm.append("imageAlt", job.productTitle);
-    await fetch(actionUrl, { method: "POST", body: attachForm });
+    await postAction(attachForm);
 
     updateJob(job.id, { status: "done" });
   } catch (e) {
@@ -1900,12 +1915,23 @@ function QuickAssignPanel() {
               </div>
             ))}
             {errorJobs.map((job) => (
-              <div key={job.id} style={{ display: "flex", alignItems: "center", gap: "0.6rem", fontSize: "12px" }}>
-                <span style={{ color: "#dc2626", flexShrink: 0 }}>✕</span>
-                <span style={{ color: "#374151", flexGrow: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {job.productTitle}
-                </span>
-                <span style={{ color: "#dc2626", flexShrink: 0 }} title={job.error}>Error</span>
+              <div key={job.id} style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", fontSize: "12px" }}>
+                  <span style={{ color: "#dc2626", flexShrink: 0 }}>✕</span>
+                  <span style={{ color: "#374151", flexGrow: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {job.productTitle}
+                  </span>
+                  <span style={{ color: "#dc2626", flexShrink: 0 }}>Error</span>
+                </div>
+                {job.error && (
+                  <div style={{
+                    fontSize: "11px", color: "#991b1b", background: "#fef2f2",
+                    border: "1px solid #fecaca", borderRadius: "6px",
+                    padding: "0.3rem 0.6rem", marginLeft: "1.3rem", wordBreak: "break-all",
+                  }}>
+                    {job.error}
+                  </div>
+                )}
               </div>
             ))}
             {doneCount > 0 && (
