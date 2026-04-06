@@ -1715,76 +1715,30 @@ type UploadJob = {
   error?: string;
 };
 
-// Runs a single upload job end-to-end using plain fetch (no Remix fetcher).
-// Posts to the current page URL so Remix routes it to the action function.
-async function runUploadJob(
-  job: UploadJob,
-  updateJob: (id: string, patch: Partial<UploadJob>) => void
-) {
-  // Use pathname+search only — avoids hash fragments and is always same-origin
-  const actionUrl = window.location.pathname + window.location.search;
-
-  async function postAction(form: FormData): Promise<unknown> {
-    const res = await fetch(actionUrl, { method: "POST", body: form });
-    if (!res.ok) {
-      const text = await res.text().catch(() => res.statusText);
-      throw new Error(`Server error ${res.status}: ${text.slice(0, 200)}`);
-    }
-    return res.json();
-  }
-
-  try {
-    // Step 1 — create staged upload slot on Shopify
-    updateJob(job.id, { status: "staging" });
-    const stageForm = new FormData();
-    stageForm.append("intent", "create-staged-upload");
-    stageForm.append("filename", job.file.name);
-    stageForm.append("mimeType", job.file.type || "image/jpeg");
-    stageForm.append("fileSize", String(job.file.size));
-    const stageData = (await postAction(stageForm)) as { stagedUpload?: StagedTarget; message?: string };
-    if (!stageData.stagedUpload) {
-      throw new Error(stageData.message ?? "Staged upload slot not returned.");
-    }
-    const { url, resourceUrl, parameters } = stageData.stagedUpload;
-
-    // Step 2 — upload file directly to Shopify CDN
-    updateJob(job.id, { status: "uploading" });
-    const cdnForm = new FormData();
-    parameters.forEach(({ name, value }) => cdnForm.append(name, value));
-    cdnForm.append("file", job.file);
-    const cdnRes = await fetch(url, { method: "POST", body: cdnForm });
-    if (!cdnRes.ok) {
-      const text = await cdnRes.text().catch(() => cdnRes.statusText);
-      throw new Error(`CDN upload failed ${cdnRes.status}: ${text.slice(0, 200)}`);
-    }
-
-    // Step 3 — attach image to product
-    updateJob(job.id, { status: "attaching" });
-    const attachForm = new FormData();
-    attachForm.append("intent", "attach-images");
-    attachForm.append("productId", job.productId);
-    attachForm.append("imageUrl", resourceUrl);
-    attachForm.append("imageAlt", job.productTitle);
-    await postAction(attachForm);
-
-    updateJob(job.id, { status: "done" });
-  } catch (e) {
-    updateJob(job.id, { status: "error", error: e instanceof Error ? e.message : String(e) });
-  }
-}
-
 function QuickAssignPanel() {
-  const loadFetcher = useFetcher<{ noImageProducts?: NoImageProduct[] }>();
+  const loadFetcher  = useFetcher<{ noImageProducts?: NoImageProduct[] }>();
+  const stageFetcher = useFetcher<{ stagedUpload?: StagedTarget }>();
+  const attachFetcher = useFetcher<{ ok: boolean; message: string }>();
 
   const [queue, setQueue]     = useState<NoImageProduct[]>([]);
   const [jobs, setJobs]       = useState<UploadJob[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  const processingRef = React.useRef(false);
+
+  // Refs for stable access inside effects
+  const processingIdRef  = React.useRef<string | null>(null);
+  const jobsRef          = React.useRef<UploadJob[]>([]);
+  const prevStageState   = React.useRef(stageFetcher.state);
+  const prevAttachState  = React.useRef(attachFetcher.state);
+  jobsRef.current = jobs;
 
   const current        = queue[0] ?? null;
   const loaded         = loadFetcher.data && "noImageProducts" in loadFetcher.data;
   const isLoadingQueue = loadFetcher.state !== "idle";
   const totalLoaded    = (loadFetcher.data as { noImageProducts?: NoImageProduct[] } | undefined)?.noImageProducts?.length ?? 0;
+
+  function updateJob(id: string, patch: Partial<UploadJob>) {
+    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
+  }
 
   // Load queue on mount
   React.useEffect(() => {
@@ -1802,18 +1756,80 @@ function QuickAssignPanel() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadFetcher.state]);
 
-  // Background processor — picks up "queued" jobs one at a time
+  // Pick up next queued job → submit to stageFetcher
   React.useEffect(() => {
+    if (processingIdRef.current) return;
     const nextJob = jobs.find((j) => j.status === "queued");
-    if (!nextJob || processingRef.current) return;
-
-    processingRef.current = true;
-    runUploadJob(nextJob, (id, patch) =>
-      setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)))
-    ).finally(() => {
-      processingRef.current = false;
-    });
+    if (!nextJob) return;
+    processingIdRef.current = nextJob.id;
+    updateJob(nextJob.id, { status: "staging" });
+    const fd = new FormData();
+    fd.append("intent", "create-staged-upload");
+    fd.append("filename", nextJob.file.name);
+    fd.append("mimeType", nextJob.file.type || "image/jpeg");
+    fd.append("fileSize", String(nextJob.file.size));
+    stageFetcher.submit(fd, { method: "post" });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs]);
+
+  // stageFetcher completed → upload to CDN (external URL, no Shopify auth needed)
+  React.useEffect(() => {
+    const wasWorking = prevStageState.current !== "idle";
+    prevStageState.current = stageFetcher.state;
+    if (!wasWorking || stageFetcher.state !== "idle") return;
+
+    const jobId = processingIdRef.current;
+    if (!jobId) return;
+    const job = jobsRef.current.find((j) => j.id === jobId);
+    if (!job) return;
+
+    const data = stageFetcher.data as { stagedUpload?: StagedTarget } | undefined;
+    if (!data?.stagedUpload) {
+      updateJob(jobId, { status: "error", error: "Failed to get staged upload slot from Shopify." });
+      processingIdRef.current = null;
+      return;
+    }
+
+    const { url, resourceUrl, parameters } = data.stagedUpload;
+    updateJob(jobId, { status: "uploading" });
+
+    const cdnForm = new FormData();
+    parameters.forEach(({ name, value }) => cdnForm.append(name, value));
+    cdnForm.append("file", job.file);
+
+    fetch(url, { method: "POST", body: cdnForm })
+      .then((res) => {
+        if (!res.ok) return res.text().then((t) => { throw new Error(`CDN ${res.status}: ${t.slice(0, 120)}`); });
+        updateJob(jobId, { status: "attaching" });
+        const af = new FormData();
+        af.append("intent", "attach-images");
+        af.append("productId", job.productId);
+        af.append("imageUrl", resourceUrl);
+        af.append("imageAlt", job.productTitle);
+        attachFetcher.submit(af, { method: "post" });
+      })
+      .catch((e: Error) => {
+        updateJob(jobId, { status: "error", error: e.message });
+        processingIdRef.current = null;
+      });
+  });
+
+  // attachFetcher completed → mark done or error, unlock queue
+  React.useEffect(() => {
+    const wasWorking = prevAttachState.current !== "idle";
+    prevAttachState.current = attachFetcher.state;
+    if (!wasWorking || attachFetcher.state !== "idle") return;
+
+    const jobId = processingIdRef.current;
+    if (!jobId) return;
+
+    if (attachFetcher.data?.ok) {
+      updateJob(jobId, { status: "done" });
+    } else {
+      updateJob(jobId, { status: "error", error: attachFetcher.data?.message ?? "Failed to attach image." });
+    }
+    processingIdRef.current = null; // triggers [jobs] effect → picks up next queued job
+  });
 
   function enqueue(file: File, product: NoImageProduct) {
     if (!file.type.startsWith("image/")) return;
