@@ -312,6 +312,15 @@ async function fetchLocations(admin: AdminClient) {
   }
 }
 
+async function resolveInventoryLocationId(admin: AdminClient, preferredLocationId?: string | null) {
+  if (preferredLocationId) {
+    return preferredLocationId;
+  }
+
+  const locations = await fetchLocations(admin);
+  return locations[0]?.id ?? "";
+}
+
 export async function fetchAllProductIdsWithZeroPrice(admin: AdminClient) {
   const productIds: string[] = [];
   let cursor: string | null = null;
@@ -1105,12 +1114,14 @@ export async function updateVariantInventory(
   inventoryItemId: string,
   quantity: number
 ) {
-  if (!locationId) {
+  const resolvedLocationId = await resolveInventoryLocationId(admin, locationId);
+
+  if (!resolvedLocationId) {
     throw new Error("No inventory location is available. Ensure SCOPES includes read_locations in .env, then reinstall or reauthorize the app.");
   }
 
-  await ensureInventoryActivated(admin, inventoryItemId, locationId);
-  await setInventoryQuantity(admin, inventoryItemId, locationId, quantity);
+  await ensureInventoryActivated(admin, inventoryItemId, resolvedLocationId);
+  await setInventoryQuantity(admin, inventoryItemId, resolvedLocationId, quantity);
 }
 
 export async function setZeroStockVariantsToMinimum(
@@ -1119,7 +1130,9 @@ export async function setZeroStockVariantsToMinimum(
   products: InventoryProduct[],
   minimumQuantity = 2
 ) {
-  if (!locationId) {
+  const resolvedLocationId = await resolveInventoryLocationId(admin, locationId);
+
+  if (!resolvedLocationId) {
     throw new Error("No inventory location is available. Ensure SCOPES includes read_locations in .env, then reinstall or reauthorize the app.");
   }
 
@@ -1129,7 +1142,7 @@ export async function setZeroStockVariantsToMinimum(
 
   for (const product of products) {
     for (const variant of product.variants) {
-      const locationLevel = variant.inventoryLevels.find((level) => level.locationId === locationId);
+      const locationLevel = variant.inventoryLevels.find((level) => level.locationId === resolvedLocationId);
       const currentQuantity = locationLevel?.available ?? variant.inventoryQuantity ?? 0;
 
       if (currentQuantity !== 0) {
@@ -1142,7 +1155,7 @@ export async function setZeroStockVariantsToMinimum(
       }
 
       try {
-        await updateVariantInventory(admin, locationId, variant.inventoryItemId, minimumQuantity);
+        await updateVariantInventory(admin, resolvedLocationId, variant.inventoryItemId, minimumQuantity);
         updatedCount += 1;
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown inventory update error.";
