@@ -1106,7 +1106,7 @@ export async function updateVariantInventory(
   quantity: number
 ) {
   if (!locationId) {
-    throw new Error("No inventory location is available. Reinstall the app after adding read_locations.");
+    throw new Error("No inventory location is available. Ensure SCOPES includes read_locations in .env, then reinstall or reauthorize the app.");
   }
 
   await ensureInventoryActivated(admin, inventoryItemId, locationId);
@@ -1120,7 +1120,7 @@ export async function setZeroStockVariantsToMinimum(
   minimumQuantity = 2
 ) {
   if (!locationId) {
-    throw new Error("No inventory location is available. Reinstall the app after adding read_locations.");
+    throw new Error("No inventory location is available. Ensure SCOPES includes read_locations in .env, then reinstall or reauthorize the app.");
   }
 
   let updatedCount = 0;

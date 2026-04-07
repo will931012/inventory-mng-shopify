@@ -587,6 +587,15 @@ export default function AppDashboard() {
           </div>
         )}
 
+        {!data.selectedLocationId && (
+          <div style={{ marginBottom: "1.25rem" }}>
+            <Banner
+              ok={false}
+              message="No inventory location is available. Add read_locations to SCOPES in .env, then reinstall or reauthorize the Shopify app."
+            />
+          </div>
+        )}
+
         {activeView === "overview" && (
           <OverviewTab summary={data.summary} locations={data.locations} shop={data.shop} />
         )}
@@ -931,6 +940,7 @@ function CatalogPanel({
   const [bulkTagsRemove, setBulkTagsRemove] = useState("");
   const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
   const [editingPriceValue, setEditingPriceValue] = useState("");
+  const hasInventoryLocation = Boolean(selectedLocationId);
   const inlinePriceFetcher = useFetcher<ActionData>();
 
   const vendors = [...new Set(products.map((p) => p.vendor).filter(Boolean))].sort();
@@ -1220,9 +1230,15 @@ function CatalogPanel({
                           <input
                             type="number" name="quantity"
                             defaultValue={level?.available ?? variant.inventoryQuantity}
+                            disabled={!hasInventoryLocation}
                             style={{ ...inputStyle, width: "80px", textAlign: "center" }}
                           />
-                          <button type="submit" style={{ ...primaryButton, padding: "0.42rem 0.65rem", fontSize: "12px" }}>
+                          <button
+                            type="submit"
+                            disabled={!hasInventoryLocation}
+                            title={!hasInventoryLocation ? "Reauthorize the app with read_locations first." : undefined}
+                            style={{ ...primaryButton, padding: "0.42rem 0.65rem", fontSize: "12px", opacity: hasInventoryLocation ? 1 : 0.6 }}
+                          >
                             Save
                           </button>
                         </Form>
@@ -1330,6 +1346,7 @@ function OperationsPanel({
 }) {
   const noBarcodeFetcher = useFetcher<{ noBarcodeProducts?: NoBarcodeProduct[] }>();
   const dupUPCFetcher    = useFetcher<{ duplicateUPCs?: DuplicateUPCGroup[] }>();
+  const hasInventoryLocation = Boolean(selectedLocationId);
 
   const zeroInView = products.filter((p) => p.variants.some((v) => Number(v.price ?? "0") === 0));
   const zeroStockVariantsInView = products.reduce((total, product) => {
@@ -1486,7 +1503,8 @@ function OperationsPanel({
             <input type="hidden" name="query" value={query} />
             <button
               type="submit"
-              disabled={isSubmitting || zeroStockVariantsInView === 0}
+              disabled={isSubmitting || zeroStockVariantsInView === 0 || !hasInventoryLocation}
+              title={!hasInventoryLocation ? "Reauthorize the app with read_locations first." : undefined}
               style={{ ...darkButton, background: "#fffbeb", color: "#b45309", borderColor: "#fcd34d" }}
             >
               {fixingZeroStock ? "Updating..." : "Set stock 0 -> 2"}
