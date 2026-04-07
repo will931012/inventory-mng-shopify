@@ -70,6 +70,7 @@ export type InventoryDashboardData = {
     productCount: number;
     variantCount: number;
     inventoryUnits: number;
+    totalStoreProducts: number;
   };
 };
 
@@ -469,16 +470,17 @@ export async function fetchInventoryDashboard(
     };
   }
 
-  function buildSummary(products: InventoryProduct[]) {
+  function buildSummary(products: InventoryProduct[], totalStoreProducts = 0) {
     return {
       productCount: products.length,
       variantCount: products.reduce((t, p) => t + p.variants.length, 0),
       inventoryUnits: products.reduce((t, p) => t + p.totalInventory, 0),
+      totalStoreProducts,
     };
   }
 
-  type FullPageResult     = { shop: ShopSummary; products: { nodes: FullNode[];     pageInfo: PageInfo } };
-  type FallbackPageResult = { shop: ShopSummary; products: { nodes: FallbackNode[]; pageInfo: PageInfo } };
+  type FullPageResult     = { shop: ShopSummary & { productsCount: { count: number } }; products: { nodes: FullNode[];     pageInfo: PageInfo } };
+  type FallbackPageResult = { shop: ShopSummary & { productsCount: { count: number } }; products: { nodes: FallbackNode[]; pageInfo: PageInfo } };
 
   // ── Full query with inventory levels (paginated) ────────────────────────────
   try {
@@ -492,7 +494,7 @@ export async function fetchInventoryDashboard(
         admin,
         `#graphql
           query InventoryDashboard($query: String!, $cursor: String) {
-            shop { name myshopifyDomain currencyCode }
+            shop { name myshopifyDomain currencyCode productsCount { count } }
             products(first: 40, after: $cursor, sortKey: UPDATED_AT, reverse: true, query: $query) {
               nodes {
                 id title handle status vendor productType tags totalInventory updatedAt
@@ -528,7 +530,7 @@ export async function fetchInventoryDashboard(
       if (!cursor) hasMore = false;
     }
 
-    return { shop, locations, selectedLocationId, products: allProducts, summary: buildSummary(allProducts) };
+    return { shop, locations, selectedLocationId, products: allProducts, summary: buildSummary(allProducts, (shop as (ShopSummary & { productsCount?: { count: number } }) | null)?.productsCount?.count ?? 0) };
 
   } catch (error) {
     // ── Fallback: simpler query without metafields/cost (paginated) ───────────
@@ -543,7 +545,7 @@ export async function fetchInventoryDashboard(
           admin,
           `#graphql
             query InventoryDashboardFallback($query: String!, $cursor: String) {
-              shop { name myshopifyDomain currencyCode }
+              shop { name myshopifyDomain currencyCode productsCount { count } }
               products(first: 40, after: $cursor, sortKey: UPDATED_AT, reverse: true, query: $query) {
                 nodes {
                   id title handle status vendor productType tags totalInventory updatedAt
@@ -578,14 +580,14 @@ export async function fetchInventoryDashboard(
           error instanceof Error
             ? `Some advanced inventory features failed to load: ${error.message}`
             : "Some advanced inventory features failed to load.",
-        summary: buildSummary(allProducts),
+        summary: buildSummary(allProducts, (shop as (ShopSummary & { productsCount?: { count: number } }) | null)?.productsCount?.count ?? 0),
       };
     } catch {
       return {
         shop: null, locations: [], selectedLocationId: "",
         products: [],
         loadWarning: "Failed to load products. Please refresh.",
-        summary: { productCount: 0, variantCount: 0, inventoryUnits: 0 },
+        summary: { productCount: 0, variantCount: 0, inventoryUnits: 0, totalStoreProducts: 0 },
       };
     }
   }
@@ -1378,13 +1380,19 @@ function applySupplierMapping(
       quantity: parseNumber(get(mapping.quantityCol), 10),
     };
 
+    const sheetStatus = String(record.__sheetStatus ?? "").trim() as "" | "ACTIVE" | "DRAFT" | "ARCHIVED";
+    const effectiveStatus: "ACTIVE" | "DRAFT" | "ARCHIVED" =
+      sheetStatus === "ACTIVE" || sheetStatus === "DRAFT" || sheetStatus === "ARCHIVED"
+        ? sheetStatus
+        : rules.defaultStatus;
+
     if (!groupMap.has(effectiveKey)) {
       groupMap.set(effectiveKey, {
         title: effectiveKey,
         vendor: get(mapping.vendorCol) || rules.defaultVendor,
         productType: get(mapping.productTypeCol) || rules.defaultProductType,
         tags: allTags,
-        status: rules.defaultStatus,
+        status: effectiveStatus,
         variants: [],
       });
     }
@@ -1422,7 +1430,8 @@ export function normalizeExcelWorkbook(
   buffer: ArrayBuffer,
   selectedSheets: string[],
   mapping: SupplierColumnMapping,
-  rules: SupplierPricingRules
+  rules: SupplierPricingRules,
+  sheetStatusOverrides: Record<string, "ACTIVE" | "DRAFT" | "ARCHIVED"> = {}
 ): ProductGroupInput[] {
   const wb = xlsxRead(buffer, { type: "array" });
   const allRecords: Record<string, unknown>[] = [];
@@ -1435,8 +1444,11 @@ export function normalizeExcelWorkbook(
     const ws = wb.Sheets[name];
     if (!ws) continue;
     const rows = xlsxUtils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
-    // Inject sheet name so applySupplierMapping can use it as a category tag
-    rows.forEach((r) => { r.__sheetName = name; });
+    // Inject sheet name and per-sheet status override
+    rows.forEach((r) => {
+      r.__sheetName = name;
+      if (sheetStatusOverrides[name]) r.__sheetStatus = sheetStatusOverrides[name];
+    });
     allRecords.push(...rows);
   }
 
@@ -1697,6 +1709,7 @@ export function buildNormalizedCsv(groups: ProductGroupInput[]) {
   ];
 
   function toHandle(title: string) {
+
     return title.toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-");
   }
   function toShopifyStatus(s: string) {
@@ -1747,4 +1760,221 @@ export function buildNormalizedCsv(groups: ProductGroupInput[]) {
   }
 
   return [header.join(","), ...rows].join("\n");
+}
+
+// ─── Bulk price update ────────────────────────────────────────────────────────
+
+export type PriceUpdateMode = "percent" | "fixed";
+
+export async function bulkUpdatePrices(
+  admin: AdminClient,
+  productIds: string[],
+  mode: PriceUpdateMode,
+  value: number
+): Promise<{ updatedCount: number; errors: string[] }> {
+  const errors: string[] = [];
+  let updatedCount = 0;
+
+  for (const productId of productIds) {
+    try {
+      const data = await executeGraphQL<{
+        product: {
+          variants: { nodes: Array<{ id: string; price: string; compareAtPrice: string | null }> };
+        } | null;
+      }>(
+        admin,
+        `#graphql
+          query ProductVariantPrices($id: ID!) {
+            product(id: $id) {
+              variants(first: 50) { nodes { id price compareAtPrice } }
+            }
+          }
+        `,
+        { id: productId }
+      );
+
+      const variants = data.product?.variants.nodes ?? [];
+      if (!variants.length) continue;
+
+      const updatedVariants = variants.map((v) => {
+        const currentPrice = parseFloat(v.price) || 0;
+        const newPrice = mode === "percent" ? currentPrice * (1 + value / 100) : currentPrice + value;
+        return { id: v.id, price: Math.max(0, newPrice).toFixed(2), compareAtPrice: v.compareAtPrice ?? null };
+      });
+
+      await executeGraphQL(
+        admin,
+        `#graphql
+          mutation BulkPriceUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+            productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+              userErrors { field message }
+            }
+          }
+        `,
+        { productId, variants: updatedVariants }
+      );
+
+      updatedCount++;
+    } catch (e) {
+      errors.push(`${productId}: ${e instanceof Error ? e.message : "error"}`);
+    }
+  }
+
+  return { updatedCount, errors };
+}
+
+// ─── Bulk tag editor ──────────────────────────────────────────────────────────
+
+export async function bulkEditTags(
+  admin: AdminClient,
+  productIds: string[],
+  tagsToAdd: string[],
+  tagsToRemove: string[]
+): Promise<{ updatedCount: number; errors: string[] }> {
+  const errors: string[] = [];
+  let updatedCount = 0;
+
+  for (const productId of productIds) {
+    try {
+      const data = await executeGraphQL<{ product: { tags: string[] } | null }>(
+        admin,
+        `#graphql query ProductTags($id: ID!) { product(id: $id) { tags } }`,
+        { id: productId }
+      );
+
+      const currentTags = data.product?.tags ?? [];
+      const newTags = [
+        ...currentTags.filter((t) => !tagsToRemove.includes(t)),
+        ...tagsToAdd.filter((t) => !currentTags.includes(t)),
+      ];
+
+      await executeGraphQL(
+        admin,
+        `#graphql
+          mutation BulkTagUpdate($product: ProductUpdateInput!) {
+            productUpdate(product: $product) { userErrors { field message } }
+          }
+        `,
+        { product: { id: productId, tags: newTags } }
+      );
+
+      updatedCount++;
+    } catch (e) {
+      errors.push(`${productId}: ${e instanceof Error ? e.message : "error"}`);
+    }
+  }
+
+  return { updatedCount, errors };
+}
+
+// ─── Products without barcode ─────────────────────────────────────────────────
+
+export type NoBarcodeProduct = {
+  id: string;
+  title: string;
+  sku: string;
+  vendor: string;
+  productType: string;
+};
+
+export async function fetchProductsWithoutBarcode(admin: AdminClient): Promise<NoBarcodeProduct[]> {
+  type Node = {
+    id: string; title: string; vendor: string; productType: string;
+    variants: { nodes: Array<{ sku: string; barcode: string | null }> };
+  };
+  type Page = { products: { nodes: Node[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } };
+
+  const result: NoBarcodeProduct[] = [];
+  let cursor: string | null = null;
+  let hasMore = true;
+
+  while (hasMore) {
+    const page: Page = await executeGraphQL<Page>(
+      admin,
+      `#graphql
+        query ProductsNoBarcode($cursor: String) {
+          products(first: 250, after: $cursor, sortKey: TITLE) {
+            nodes {
+              id title vendor productType
+              variants(first: 10) { nodes { sku barcode } }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      `,
+      { cursor }
+    );
+
+    for (const p of page.products.nodes) {
+      const allMissingBarcode = p.variants.nodes.every((v) => !v.barcode);
+      if (allMissingBarcode) {
+        result.push({
+          id: p.id, title: p.title, vendor: p.vendor ?? "",
+          productType: p.productType ?? "",
+          sku: p.variants.nodes[0]?.sku ?? "",
+        });
+      }
+    }
+
+    hasMore = page.products.pageInfo.hasNextPage;
+    cursor = page.products.pageInfo.endCursor ?? null;
+    if (!cursor) hasMore = false;
+  }
+
+  return result;
+}
+
+// ─── Duplicate UPC detector ───────────────────────────────────────────────────
+
+export type DuplicateUPCGroup = {
+  barcode: string;
+  products: Array<{ id: string; title: string; sku: string; vendor: string }>;
+};
+
+export async function fetchDuplicateUPCs(admin: AdminClient): Promise<DuplicateUPCGroup[]> {
+  type Node = {
+    id: string; title: string; vendor: string;
+    variants: { nodes: Array<{ sku: string; barcode: string | null }> };
+  };
+  type Page = { products: { nodes: Node[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } };
+
+  const barcodeMap = new Map<string, Array<{ id: string; title: string; sku: string; vendor: string }>>();
+  let cursor: string | null = null;
+  let hasMore = true;
+
+  while (hasMore) {
+    const page: Page = await executeGraphQL<Page>(
+      admin,
+      `#graphql
+        query ProductsForUPCScan($cursor: String) {
+          products(first: 250, after: $cursor, sortKey: TITLE) {
+            nodes {
+              id title vendor
+              variants(first: 10) { nodes { sku barcode } }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      `,
+      { cursor }
+    );
+
+    for (const p of page.products.nodes) {
+      for (const v of p.variants.nodes) {
+        if (!v.barcode) continue;
+        const key = v.barcode.trim();
+        if (!barcodeMap.has(key)) barcodeMap.set(key, []);
+        barcodeMap.get(key)!.push({ id: p.id, title: p.title, sku: v.sku, vendor: p.vendor ?? "" });
+      }
+    }
+
+    hasMore = page.products.pageInfo.hasNextPage;
+    cursor = page.products.pageInfo.endCursor ?? null;
+    if (!cursor) hasMore = false;
+  }
+
+  return [...barcodeMap.entries()]
+    .filter(([, products]) => products.length > 1)
+    .map(([barcode, products]) => ({ barcode, products }))
+    .sort((a, b) => b.products.length - a.products.length);
 }

@@ -8,6 +8,8 @@ import {
   attachProductImages,
   buildInventoryCsv,
   buildNormalizedCsv,
+  bulkEditTags,
+  bulkUpdatePrices,
   createProduct,
   createProductGroup,
   createStagedUpload,
@@ -15,8 +17,10 @@ import {
   deleteProductImage,
   deleteProducts,
   fetchAllProductIdsWithZeroPrice,
+  fetchDuplicateUPCs,
   fetchInventoryDashboard,
   fetchProductImages,
+  fetchProductsWithoutBarcode,
   fetchProductsWithoutImages,
   getExcelInfo,
   importProductsFromCsv,
@@ -25,7 +29,7 @@ import {
   updateProductRecord,
   updateVariantInventory
 } from "../inventory.server";
-import type { ExcelInfo, NoImageProduct, ProductGroupInput, SupplierColumnMapping, SupplierPricingRules } from "../inventory.server";
+import type { DuplicateUPCGroup, ExcelInfo, NoBarcodeProduct, NoImageProduct, ProductGroupInput, SupplierColumnMapping, SupplierPricingRules } from "../inventory.server";
 import { authenticate } from "../shopify.server";
 
 type ProductImageEntry = { id: string; url: string; alt: string };
@@ -38,7 +42,9 @@ type ActionData =
   | { preview: true; products: ProductGroupInput[] }
   | { images: ProductImageEntry[] }
   | { noImageProducts: NoImageProduct[] }
-  | { stagedUpload: StagedTarget };
+  | { stagedUpload: StagedTarget }
+  | { noBarcodeProducts: NoBarcodeProduct[] }
+  | { duplicateUPCs: DuplicateUPCGroup[] };
 
 const tabs = [
   { id: "overview",   label: "Overview",   icon: "📊" },
@@ -305,10 +311,22 @@ export async function action({ request }: ActionFunctionArgs) {
       const isExcel = uploaded.name.toLowerCase().endsWith(".xlsx") || uploaded.name.toLowerCase().endsWith(".xls");
       let normalized;
 
+      // Collect per-sheet status overrides (sent as sheetStatus_<SheetName> fields)
+      const sheetStatusOverrides: Record<string, "ACTIVE" | "DRAFT" | "ARCHIVED"> = {};
+      for (const [key, val] of formData.entries()) {
+        if (key.startsWith("sheetStatus_")) {
+          const sheetName = key.slice("sheetStatus_".length);
+          const s = String(val).toUpperCase();
+          if (s === "ACTIVE" || s === "DRAFT" || s === "ARCHIVED") {
+            sheetStatusOverrides[sheetName] = s;
+          }
+        }
+      }
+
       if (isExcel) {
         const buffer = await uploaded.arrayBuffer();
         const selectedSheets = formData.getAll("selectedSheets").map(String).filter(Boolean);
-        normalized = normalizeExcelWorkbook(buffer, selectedSheets, mapping, rules);
+        normalized = normalizeExcelWorkbook(buffer, selectedSheets, mapping, rules, sheetStatusOverrides);
       } else {
         const csvText = await uploaded.text();
         normalized = normalizeSupplierCsv(csvText, mapping, rules);
@@ -386,6 +404,42 @@ export async function action({ request }: ActionFunctionArgs) {
       if (!productId) throw new Error("Select a product.");
       const images = await fetchProductImages(admin, productId);
       return json({ images });
+    }
+
+    if (intent === "bulk-update-prices") {
+      const productIds = formData.getAll("productIds").map(String).filter(Boolean);
+      const mode = String(formData.get("priceMode") ?? "percent") as "percent" | "fixed";
+      const value = parseFloat(String(formData.get("priceValue") ?? "0")) || 0;
+      if (!productIds.length) throw new Error("Select at least one product.");
+      const result = await bulkUpdatePrices(admin, productIds, mode, value);
+      return json<ActionData>({
+        ok: result.errors.length === 0,
+        message: `${result.updatedCount} product(s) updated.`,
+        errors: result.errors,
+      });
+    }
+
+    if (intent === "bulk-edit-tags") {
+      const productIds = formData.getAll("productIds").map(String).filter(Boolean);
+      const tagsToAdd = String(formData.get("tagsToAdd") ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+      const tagsToRemove = String(formData.get("tagsToRemove") ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+      if (!productIds.length) throw new Error("Select at least one product.");
+      const result = await bulkEditTags(admin, productIds, tagsToAdd, tagsToRemove);
+      return json<ActionData>({
+        ok: result.errors.length === 0,
+        message: `Tags updated on ${result.updatedCount} product(s).`,
+        errors: result.errors,
+      });
+    }
+
+    if (intent === "load-no-barcode-products") {
+      const products = await fetchProductsWithoutBarcode(admin);
+      return json({ noBarcodeProducts: products });
+    }
+
+    if (intent === "scan-duplicate-upcs") {
+      const groups = await fetchDuplicateUPCs(admin);
+      return json({ duplicateUPCs: groups });
     }
 
     return json<ActionData>({ ok: false, message: "Unknown action." });
@@ -552,6 +606,7 @@ export default function AppDashboard() {
               selectedLocationId={data.selectedLocationId}
               products={data.products}
               isSubmitting={isSubmitting}
+              submittingIntent={submittingIntent}
             />
           </>
         )}
@@ -626,12 +681,13 @@ function OverviewTab({
   locations,
   shop,
 }: {
-  summary: { productCount: number; variantCount: number; inventoryUnits: number };
+  summary: { productCount: number; variantCount: number; inventoryUnits: number; totalStoreProducts: number };
   locations: { id: string; name: string }[];
   shop: { name?: string; myshopifyDomain?: string; currencyCode?: string } | null | undefined;
 }) {
+  const displayCount = summary.totalStoreProducts > 0 ? summary.totalStoreProducts : summary.productCount;
   const metrics = [
-    { label: "Products",        value: summary.productCount,   accent: "#6366f1", bg: "#f5f3ff", icon: "🛍️" },
+    { label: "Products",        value: displayCount,           accent: "#6366f1", bg: "#f5f3ff", icon: "🛍️", note: summary.totalStoreProducts > 0 ? "store total" : undefined },
     { label: "Variants",        value: summary.variantCount,   accent: "#0ea5e9", bg: "#f0f9ff", icon: "🔀" },
     { label: "Inventory units", value: summary.inventoryUnits, accent: "#22c55e", bg: "#f0fdf4", icon: "📦" },
     { label: "Locations",       value: locations.length,       accent: "#f59e0b", bg: "#fffbeb", icon: "📍" },
@@ -661,6 +717,9 @@ function OverviewTab({
             <strong style={{ fontSize: "28px", fontWeight: 800, color: "#0f172a", letterSpacing: "-0.03em", lineHeight: 1 }}>
               {m.value.toLocaleString()}
             </strong>
+            {"note" in m && m.note && (
+              <span style={{ fontSize: "10px", color: "#94a3b8", marginTop: "-0.4rem" }}>{m.note}</span>
+            )}
           </article>
         ))}
       </div>
@@ -819,19 +878,68 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 // ─── Catalog panel ────────────────────────────────────────────────────────────
 
+type CatalogSortKey = "updated" | "price_asc" | "price_desc" | "stock_asc" | "stock_desc" | "title";
+
 function CatalogPanel({
   shopDomain,
   currencyCode,
   selectedLocationId,
   products,
   isSubmitting,
+  submittingIntent,
 }: {
   shopDomain?: string;
   currencyCode: string;
   selectedLocationId: string;
   products: Awaited<ReturnType<typeof fetchInventoryDashboard>>["products"];
   isSubmitting: boolean;
+  submittingIntent: string;
 }) {
+  const bulkPriceFetcher = useFetcher<ActionData>();
+  const bulkTagFetcher   = useFetcher<ActionData>();
+
+  const [vendorFilter, setVendorFilter] = useState("");
+  const [sortKey, setSortKey]           = useState<CatalogSortKey>("updated");
+  const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set());
+  const [bulkPriceMode, setBulkPriceMode] = useState<"percent" | "fixed">("percent");
+  const [bulkPriceValue, setBulkPriceValue] = useState("10");
+  const [bulkTagsAdd, setBulkTagsAdd]     = useState("");
+  const [bulkTagsRemove, setBulkTagsRemove] = useState("");
+  const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
+  const [editingPriceValue, setEditingPriceValue] = useState("");
+  const inlinePriceFetcher = useFetcher<ActionData>();
+
+  const vendors = [...new Set(products.map((p) => p.vendor).filter(Boolean))].sort();
+
+  const sorted = [...products]
+    .filter((p) => !vendorFilter || p.vendor === vendorFilter)
+    .sort((a, b) => {
+      const av = a.variants[0]; const bv = b.variants[0];
+      if (sortKey === "price_asc") return (parseFloat(av?.price ?? "0")) - (parseFloat(bv?.price ?? "0"));
+      if (sortKey === "price_desc") return (parseFloat(bv?.price ?? "0")) - (parseFloat(av?.price ?? "0"));
+      if (sortKey === "stock_asc") return a.totalInventory - b.totalInventory;
+      if (sortKey === "stock_desc") return b.totalInventory - a.totalInventory;
+      if (sortKey === "title") return a.title.localeCompare(b.title);
+      return 0; // "updated" — keep server order
+    });
+
+  const allChecked = sorted.length > 0 && sorted.every((p) => selectedIds.has(p.id));
+
+  function toggleAll(checked: boolean) {
+    setSelectedIds(checked ? new Set(sorted.map((p) => p.id)) : new Set());
+  }
+
+  function toggleOne(id: string, checked: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+
+  const isBulkUpdatingPrice = bulkPriceFetcher.state !== "idle" && submittingIntent === "";
+  const isBulkUpdatingTags  = bulkTagFetcher.state !== "idle";
+
   const thStyle: CSSProperties = {
     padding: "0.6rem 0.85rem",
     fontSize: "10px", fontWeight: 700,
@@ -845,6 +953,120 @@ function CatalogPanel({
 
   return (
     <section style={panelStyle}>
+      {/* Filters row */}
+      <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginBottom: "0.85rem", alignItems: "center" }}>
+        <select value={vendorFilter} onChange={(e) => setVendorFilter(e.target.value)}
+          style={{ ...inputStyle, width: "auto", minWidth: "140px" }}>
+          <option value="">All vendors</option>
+          {vendors.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <select value={sortKey} onChange={(e) => setSortKey(e.target.value as CatalogSortKey)}
+          style={{ ...inputStyle, width: "auto", minWidth: "160px" }}>
+          <option value="updated">Sort: Recently updated</option>
+          <option value="title">Sort: Title A→Z</option>
+          <option value="price_asc">Sort: Price low→high</option>
+          <option value="price_desc">Sort: Price high→low</option>
+          <option value="stock_asc">Sort: Stock low→high</option>
+          <option value="stock_desc">Sort: Stock high→low</option>
+        </select>
+        {vendorFilter && (
+          <span style={{ fontSize: "12px", color: "#64748b" }}>
+            {sorted.length} product{sorted.length !== 1 ? "s" : ""} from <strong>{vendorFilter}</strong>
+          </span>
+        )}
+      </div>
+
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div style={{
+          background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "10px",
+          padding: "0.75rem 1rem", marginBottom: "0.85rem",
+          display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "flex-end",
+        }}>
+          <span style={{ fontSize: "13px", fontWeight: 700, color: "#1d4ed8", alignSelf: "center" }}>
+            {selectedIds.size} selected
+          </span>
+
+          {/* Bulk price */}
+          <div style={{ display: "flex", gap: "0.4rem", alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", marginBottom: "0.2rem" }}>Price mode</div>
+              <select value={bulkPriceMode} onChange={(e) => setBulkPriceMode(e.target.value as "percent" | "fixed")}
+                style={{ ...inputStyle, width: "auto", fontSize: "12px" }}>
+                <option value="percent">% change</option>
+                <option value="fixed">Fixed +/-</option>
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", marginBottom: "0.2rem" }}>
+                {bulkPriceMode === "percent" ? "%" : currencyCode}
+              </div>
+              <input type="number" step="0.01" value={bulkPriceValue}
+                onChange={(e) => setBulkPriceValue(e.target.value)}
+                style={{ ...inputStyle, width: "80px", fontSize: "12px" }}
+                placeholder="10" />
+            </div>
+            <bulkPriceFetcher.Form method="post" onSubmit={(e) => {
+              if (!window.confirm(`Apply price change to ${selectedIds.size} product(s)?`)) e.preventDefault();
+            }}>
+              <input type="hidden" name="intent" value="bulk-update-prices" />
+              <input type="hidden" name="priceMode" value={bulkPriceMode} />
+              <input type="hidden" name="priceValue" value={bulkPriceValue} />
+              {[...selectedIds].map((id) => <input key={id} type="hidden" name="productIds" value={id} />)}
+              <button type="submit" disabled={isBulkUpdatingPrice}
+                style={{ ...primaryButton, fontSize: "12px", padding: "0.42rem 0.75rem" }}>
+                {isBulkUpdatingPrice ? "Updating…" : "Apply price"}
+              </button>
+            </bulkPriceFetcher.Form>
+          </div>
+
+          <div style={{ width: "1px", height: "32px", background: "#bfdbfe", alignSelf: "center" }} />
+
+          {/* Bulk tags */}
+          <div style={{ display: "flex", gap: "0.4rem", alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", marginBottom: "0.2rem" }}>Add tags</div>
+              <input type="text" value={bulkTagsAdd} onChange={(e) => setBulkTagsAdd(e.target.value)}
+                placeholder="tag1, tag2" style={{ ...inputStyle, width: "130px", fontSize: "12px" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", marginBottom: "0.2rem" }}>Remove tags</div>
+              <input type="text" value={bulkTagsRemove} onChange={(e) => setBulkTagsRemove(e.target.value)}
+                placeholder="tag1, tag2" style={{ ...inputStyle, width: "130px", fontSize: "12px" }} />
+            </div>
+            <bulkTagFetcher.Form method="post">
+              <input type="hidden" name="intent" value="bulk-edit-tags" />
+              <input type="hidden" name="tagsToAdd" value={bulkTagsAdd} />
+              <input type="hidden" name="tagsToRemove" value={bulkTagsRemove} />
+              {[...selectedIds].map((id) => <input key={id} type="hidden" name="productIds" value={id} />)}
+              <button type="submit" disabled={isBulkUpdatingTags || (!bulkTagsAdd && !bulkTagsRemove)}
+                style={{ ...darkButton, fontSize: "12px", padding: "0.42rem 0.75rem", background: "#f5f3ff", borderColor: "#c4b5fd", color: "#6d28d9" }}>
+                {isBulkUpdatingTags ? "Updating…" : "Apply tags"}
+              </button>
+            </bulkTagFetcher.Form>
+          </div>
+
+          <button type="button" onClick={() => setSelectedIds(new Set())}
+            style={{ ...darkButton, fontSize: "12px", padding: "0.42rem 0.65rem", alignSelf: "flex-end" }}>
+            Clear
+          </button>
+        </div>
+      )}
+
+      {/* Bulk fetcher result banners */}
+      {bulkPriceFetcher.data && "ok" in bulkPriceFetcher.data && (
+        <div style={{ marginBottom: "0.75rem" }}>
+          <Banner ok={bulkPriceFetcher.data.ok} message={bulkPriceFetcher.data.message}
+            errors={"errors" in bulkPriceFetcher.data ? bulkPriceFetcher.data.errors : undefined} />
+        </div>
+      )}
+      {bulkTagFetcher.data && "ok" in bulkTagFetcher.data && (
+        <div style={{ marginBottom: "0.75rem" }}>
+          <Banner ok={bulkTagFetcher.data.ok} message={bulkTagFetcher.data.message}
+            errors={"errors" in bulkTagFetcher.data ? bulkTagFetcher.data.errors : undefined} />
+        </div>
+      )}
+
       <Form method="post">
         <input type="hidden" name="intent" value="delete-products" />
         <input type="hidden" name="locationId" value={selectedLocationId} />
@@ -854,16 +1076,12 @@ function CatalogPanel({
             <thead>
               <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e2e8f0" }}>
                 <th style={{ ...thStyle, width: "36px" }}>
-                  <input type="checkbox" style={{ cursor: "pointer" }}
-                    onChange={(e) => {
-                      const checkboxes = document.querySelectorAll<HTMLInputElement>('input[name="productIds"]');
-                      checkboxes.forEach((cb) => { cb.checked = e.target.checked; });
-                    }}
-                  />
+                  <input type="checkbox" checked={allChecked} style={{ cursor: "pointer" }}
+                    onChange={(e) => toggleAll(e.target.checked)} />
                 </th>
                 <th style={thStyle}>Product</th>
                 <th style={thStyle}>Status</th>
-                <th style={thStyle}>SKU</th>
+                <th style={thStyle}>SKU / Barcode</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Price</th>
                 <th style={thStyle}>Stock</th>
                 <th style={thStyle}>Actions</th>
@@ -871,27 +1089,41 @@ function CatalogPanel({
               </tr>
             </thead>
             <tbody>
-              {products.length === 0 ? (
+              {sorted.length === 0 ? (
                 <tr>
                   <td colSpan={8} style={{ padding: "3rem", textAlign: "center", color: "#94a3b8", fontSize: "13px" }}>
                     <div style={{ fontSize: "32px", marginBottom: "0.5rem" }}>🔍</div>
                     No products match this filter.
                   </td>
                 </tr>
-              ) : products.map((product, rowIndex) => {
+              ) : sorted.map((product, rowIndex) => {
                 const variant = product.variants[0];
                 const level = variant?.inventoryLevels.find((item) => item.locationId === selectedLocationId);
                 const badge = statusBadge(product.status);
+                const isEditingPrice = editingPriceId === product.id;
+                // Pricing sanity flags
+                const price   = parseFloat(variant?.price ?? "0");
+                const cost    = parseFloat(variant?.cost ?? "0");
+                const ws      = parseFloat(variant?.wholesalePrice ?? "0");
+                const priceSanityWarn = (cost > 0 && cost > price) || (ws > 0 && ws > price);
                 return (
-                  <tr key={product.id} style={{ background: rowIndex % 2 === 0 ? "#fff" : "#fafafa" }}>
+                  <tr key={product.id} style={{ background: priceSanityWarn ? "#fffbeb" : rowIndex % 2 === 0 ? "#fff" : "#fafafa" }}>
                     <td style={{ ...tdStyle, width: "36px" }}>
-                      <input type="checkbox" name="productIds" value={product.id} style={{ cursor: "pointer" }} />
+                      <input type="checkbox" name="productIds" value={product.id}
+                        checked={selectedIds.has(product.id)}
+                        onChange={(e) => toggleOne(product.id, e.target.checked)}
+                        style={{ cursor: "pointer" }} />
                     </td>
                     <td style={tdStyle}>
                       <div style={{ fontWeight: 600, color: "#0f172a", lineHeight: 1.3, maxWidth: "240px" }}>{product.title}</div>
                       <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "0.2rem" }}>
                         {product.vendor || "No vendor"}{product.productType ? ` · ${product.productType}` : ""}
                       </div>
+                      {priceSanityWarn && (
+                        <div style={{ fontSize: "10px", color: "#b45309", marginTop: "0.2rem", fontWeight: 600 }}>
+                          ⚠ Cost or wholesale exceeds retail
+                        </div>
+                      )}
                     </td>
                     <td style={tdStyle}>
                       <span style={{
@@ -904,14 +1136,56 @@ function CatalogPanel({
                       <div style={{ fontFamily: "monospace", fontSize: "12px", fontWeight: 600, color: "#374151" }}>
                         {variant?.sku || <span style={{ color: "#94a3b8", fontFamily: "inherit", fontWeight: 400 }}>No SKU</span>}
                       </div>
-                      {variant?.title && variant.title !== "Default Title" && (
-                        <div style={{ fontSize: "11px", color: "#64748b", marginTop: "0.15rem" }}>{variant.title}</div>
+                      {variant?.barcode ? (
+                        <div style={{ fontSize: "11px", color: "#64748b", marginTop: "0.15rem" }}>UPC: {variant.barcode}</div>
+                      ) : (
+                        <div style={{ fontSize: "11px", color: "#f59e0b", marginTop: "0.15rem" }}>No barcode</div>
                       )}
                     </td>
                     <td style={{ ...tdStyle, textAlign: "right", whiteSpace: "nowrap" }}>
-                      <div style={{ fontWeight: 700, fontSize: "13px" }}>{variant?.price ?? "0.00"} <span style={{ fontWeight: 400, color: "#94a3b8", fontSize: "11px" }}>{currencyCode}</span></div>
-                      {variant?.wholesalePrice ? <div style={{ fontSize: "11px", color: "#7c3aed", marginTop: "0.1rem" }}>WS: {variant.wholesalePrice}</div> : null}
-                      {variant?.cost ? <div style={{ fontSize: "11px", color: "#64748b", marginTop: "0.1rem" }}>Cost: {variant.cost}</div> : null}
+                      {isEditingPrice ? (
+                        <inlinePriceFetcher.Form method="post" style={{ display: "flex", flexDirection: "column", gap: "0.3rem", alignItems: "flex-end" }}>
+                          <input type="hidden" name="intent" value="update-product" />
+                          <input type="hidden" name="locationId" value={selectedLocationId} />
+                          <input type="hidden" name="productId" value={product.id} />
+                          <input type="hidden" name="variantId" value={variant?.id ?? ""} />
+                          <input type="hidden" name="inventoryItemId" value={variant?.inventoryItemId ?? ""} />
+                          <input type="hidden" name="title" value={product.title} />
+                          <input type="hidden" name="sku" value={variant?.sku ?? ""} />
+                          <input type="hidden" name="compareAtPrice" value={variant?.compareAtPrice ?? ""} />
+                          <input type="hidden" name="wholesalePrice" value={variant?.wholesalePrice ?? ""} />
+                          <input type="hidden" name="cost" value={variant?.cost ?? ""} />
+                          <input type="hidden" name="quantity" value={String(level?.available ?? variant?.inventoryQuantity ?? 0)} />
+                          <input type="hidden" name="barcode" value={variant?.barcode ?? ""} />
+                          <input type="hidden" name="vendor" value={product.vendor} />
+                          <input type="hidden" name="productType" value={product.productType} />
+                          <input type="hidden" name="tags" value={product.tags.join(", ")} />
+                          <input type="hidden" name="status" value={product.status} />
+                          <input type="number" name="price" step="0.01" value={editingPriceValue}
+                            onChange={(e) => setEditingPriceValue(e.target.value)}
+                            style={{ ...inputStyle, width: "90px", textAlign: "right", fontSize: "13px", fontWeight: 700 }}
+                            autoFocus />
+                          <div style={{ display: "flex", gap: "0.25rem" }}>
+                            <button type="submit" style={{ ...primaryButton, fontSize: "11px", padding: "0.25rem 0.5rem" }}>✓</button>
+                            <button type="button" onClick={() => setEditingPriceId(null)}
+                              style={{ ...darkButton, fontSize: "11px", padding: "0.25rem 0.5rem" }}>✕</button>
+                          </div>
+                        </inlinePriceFetcher.Form>
+                      ) : (
+                        <div
+                          onClick={() => { setEditingPriceId(product.id); setEditingPriceValue(variant?.price ?? "0"); }}
+                          title="Click to edit price"
+                          style={{ cursor: "pointer", padding: "0.2rem 0.4rem", borderRadius: "4px", display: "inline-block" }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = "#eff6ff")}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                        >
+                          <div style={{ fontWeight: 700, fontSize: "13px" }}>
+                            {variant?.price ?? "0.00"} <span style={{ fontWeight: 400, color: "#94a3b8", fontSize: "11px" }}>{currencyCode}</span>
+                          </div>
+                          {variant?.wholesalePrice ? <div style={{ fontSize: "11px", color: "#7c3aed", marginTop: "0.1rem" }}>WS: {variant.wholesalePrice}</div> : null}
+                          {variant?.cost ? <div style={{ fontSize: "11px", color: "#64748b", marginTop: "0.1rem" }}>Cost: {variant.cost}</div> : null}
+                        </div>
+                      )}
                     </td>
                     <td style={tdStyle}>
                       {variant ? (
@@ -1002,9 +1276,9 @@ function CatalogPanel({
           </table>
         </div>
 
-        {products.length > 0 && (
+        {sorted.length > 0 && (
           <div style={{ marginTop: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
-            <span style={{ fontSize: "12px", color: "#94a3b8" }}>Check boxes above then click delete to remove selected products.</span>
+            <span style={{ fontSize: "12px", color: "#94a3b8" }}>Check boxes then use bulk actions bar above, or delete selected below.</span>
             <button type="submit" disabled={isSubmitting} style={{ ...darkButton, background: "#fef2f2", color: "#dc2626", borderColor: "#fecaca" }}>
               Delete selected
             </button>
@@ -1030,12 +1304,139 @@ function OperationsPanel({
   isSubmitting: boolean;
   submittingIntent: string;
 }) {
+  const noBarcodeFetcher = useFetcher<{ noBarcodeProducts?: NoBarcodeProduct[] }>();
+  const dupUPCFetcher    = useFetcher<{ duplicateUPCs?: DuplicateUPCGroup[] }>();
+
   const zeroInView = products.filter((p) => p.variants.some((v) => Number(v.price ?? "0") === 0));
+  const priceSanityIssues = products.filter((p) => {
+    const v = p.variants[0];
+    if (!v) return false;
+    const price = parseFloat(v.price ?? "0");
+    const cost  = parseFloat(v.cost ?? "0");
+    const ws    = parseFloat(v.wholesalePrice ?? "0");
+    return (cost > 0 && cost > price) || (ws > 0 && ws > price);
+  });
+
   const deletingView = isSubmitting && submittingIntent === "delete-products-with-zero-price";
   const deletingAll  = isSubmitting && submittingIntent === "delete-all-products-with-zero-price";
 
+  const noBarcodeProducts = noBarcodeFetcher.data?.noBarcodeProducts ?? null;
+  const duplicateUPCs     = dupUPCFetcher.data?.duplicateUPCs ?? null;
+  const isScanningBarcode = noBarcodeFetcher.state !== "idle";
+  const isScanningUPC     = dupUPCFetcher.state !== "idle";
+
+  const opRow = (content: React.ReactNode): CSSProperties => ({
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    gap: "1rem", flexWrap: "wrap",
+    background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px",
+    padding: "0.85rem 1rem",
+  });
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem", maxWidth: "760px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem", maxWidth: "860px" }}>
+
+      {/* ── Pricing sanity ── */}
+      {priceSanityIssues.length > 0 && (
+        <article style={{ ...panelStyle, border: "1px solid #fde68a", background: "#fffbeb" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.85rem" }}>
+            <span style={{ background: "#fef3c7", color: "#d97706", borderRadius: "8px", width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "15px", flexShrink: 0 }}>⚠</span>
+            <div>
+              <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#92400e" }}>Pricing sanity issues</h2>
+              <p style={{ margin: 0, fontSize: "12px", color: "#b45309" }}>{priceSanityIssues.length} product(s) where cost or wholesale exceeds retail price.</p>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+            {priceSanityIssues.slice(0, 20).map((p) => {
+              const v = p.variants[0]!;
+              return (
+                <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "0.45rem 0.7rem", background: "#fff", borderRadius: "6px", border: "1px solid #fde68a", fontSize: "12px", gap: "1rem", flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 600, color: "#0f172a" }}>{p.title}</span>
+                  <span style={{ color: "#92400e", whiteSpace: "nowrap" }}>
+                    Retail {v.price} · Cost {v.cost || "—"} · WS {v.wholesalePrice || "—"}
+                  </span>
+                </div>
+              );
+            })}
+            {priceSanityIssues.length > 20 && <p style={{ margin: "0.2rem 0 0", fontSize: "11px", color: "#94a3b8" }}>…and {priceSanityIssues.length - 20} more</p>}
+          </div>
+        </article>
+      )}
+
+      {/* ── No-barcode scanner ── */}
+      <article style={panelStyle}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", marginBottom: noBarcodeProducts !== null ? "0.85rem" : 0 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>Products without barcode</h2>
+            <p style={{ margin: "0.15rem 0 0", fontSize: "12px", color: "#64748b" }}>
+              {noBarcodeProducts !== null ? `${noBarcodeProducts.length} product(s) missing a UPC/barcode.` : "Scan entire catalog for products with no barcode."}
+            </p>
+          </div>
+          <button type="button" disabled={isScanningBarcode}
+            style={{ ...darkButton, background: "#eff6ff", borderColor: "#bfdbfe", color: "#1d4ed8" }}
+            onClick={() => {
+              const fd = new FormData(); fd.append("intent", "load-no-barcode-products");
+              noBarcodeFetcher.submit(fd, { method: "post" });
+            }}>
+            {isScanningBarcode ? "Scanning…" : "Scan for missing barcodes"}
+          </button>
+        </div>
+        {noBarcodeProducts !== null && noBarcodeProducts.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+            {noBarcodeProducts.slice(0, 30).map((p) => (
+              <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "0.4rem 0.7rem", background: "#fafafa", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px", gap: "1rem" }}>
+                <span style={{ fontWeight: 600, color: "#0f172a" }}>{p.title}</span>
+                <span style={{ color: "#64748b" }}>{p.vendor || "—"} · SKU: {p.sku || "—"}</span>
+              </div>
+            ))}
+            {noBarcodeProducts.length > 30 && <p style={{ margin: "0.2rem 0 0", fontSize: "11px", color: "#94a3b8" }}>…and {noBarcodeProducts.length - 30} more</p>}
+          </div>
+        )}
+        {noBarcodeProducts !== null && noBarcodeProducts.length === 0 && (
+          <p style={{ margin: 0, fontSize: "12px", color: "#15803d" }}>✓ All products have a barcode.</p>
+        )}
+      </article>
+
+      {/* ── Duplicate UPC scanner ── */}
+      <article style={panelStyle}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", marginBottom: duplicateUPCs !== null ? "0.85rem" : 0 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>Duplicate UPCs</h2>
+            <p style={{ margin: "0.15rem 0 0", fontSize: "12px", color: "#64748b" }}>
+              {duplicateUPCs !== null ? `${duplicateUPCs.length} barcode(s) shared by multiple products.` : "Find barcodes assigned to more than one product."}
+            </p>
+          </div>
+          <button type="button" disabled={isScanningUPC}
+            style={{ ...darkButton, background: "#faf5ff", borderColor: "#ddd6fe", color: "#6d28d9" }}
+            onClick={() => {
+              const fd = new FormData(); fd.append("intent", "scan-duplicate-upcs");
+              dupUPCFetcher.submit(fd, { method: "post" });
+            }}>
+            {isScanningUPC ? "Scanning…" : "Scan for duplicate UPCs"}
+          </button>
+        </div>
+        {duplicateUPCs !== null && duplicateUPCs.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            {duplicateUPCs.slice(0, 20).map((g) => (
+              <div key={g.barcode} style={{ background: "#faf5ff", border: "1px solid #ddd6fe", borderRadius: "8px", padding: "0.6rem 0.85rem" }}>
+                <div style={{ fontSize: "11px", fontWeight: 700, color: "#6d28d9", fontFamily: "monospace", marginBottom: "0.3rem" }}>
+                  UPC: {g.barcode} <span style={{ fontWeight: 400, color: "#7c3aed" }}>({g.products.length} products)</span>
+                </div>
+                {g.products.map((p) => (
+                  <div key={p.id} style={{ fontSize: "12px", color: "#374151", paddingLeft: "0.5rem" }}>
+                    {p.title} {p.sku ? `· SKU: ${p.sku}` : ""} {p.vendor ? `· ${p.vendor}` : ""}
+                  </div>
+                ))}
+              </div>
+            ))}
+            {duplicateUPCs.length > 20 && <p style={{ margin: "0.2rem 0 0", fontSize: "11px", color: "#94a3b8" }}>…and {duplicateUPCs.length - 20} more</p>}
+          </div>
+        )}
+        {duplicateUPCs !== null && duplicateUPCs.length === 0 && (
+          <p style={{ margin: 0, fontSize: "12px", color: "#15803d" }}>✓ No duplicate barcodes found.</p>
+        )}
+      </article>
+
+      {/* ── Danger Zone ── */}
       <article style={{ ...panelStyle, border: "1px solid #fca5a5", background: "#fff" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.4rem" }}>
           <span style={{
@@ -1050,13 +1451,7 @@ function OperationsPanel({
         </div>
 
         <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-          {/* Delete view 0.00 */}
-          <div style={{
-            display: "flex", justifyContent: "space-between", alignItems: "center",
-            gap: "1rem", flexWrap: "wrap",
-            background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px",
-            padding: "0.85rem 1rem",
-          }}>
+          <div style={opRow(null)}>
             <div>
               <div style={{ fontSize: "13px", fontWeight: 600, color: "#0f172a", marginBottom: "0.2rem" }}>
                 Delete $0.00 products — current view
@@ -1079,13 +1474,7 @@ function OperationsPanel({
             </Form>
           </div>
 
-          {/* Delete all 0.00 */}
-          <div style={{
-            display: "flex", justifyContent: "space-between", alignItems: "center",
-            gap: "1rem", flexWrap: "wrap",
-            background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px",
-            padding: "0.85rem 1rem",
-          }}>
+          <div style={opRow(null)}>
             <div>
               <div style={{ fontSize: "13px", fontWeight: 600, color: "#0f172a", marginBottom: "0.2rem" }}>
                 Delete $0.00 products — entire store
@@ -1374,6 +1763,8 @@ const SUPPLIER_FIELDS = [
   { name: "wholesalePriceCol", label: "Wholesale price",     required: false },
 ] as const;
 
+const SUPPLIER_MAPPING_KEY = "supplierColumnMapping_v1";
+
 function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationId: string; isSubmitting: boolean }) {
   const detectorFetcher = useFetcher<ExcelInfo>();
   const previewFetcher  = useFetcher<ActionData>();
@@ -1383,12 +1774,53 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
   const [tagColumnsSelected, setTagColumnsSelected]       = useState<string[]>([]);
   const [variantColsSelected, setVariantColsSelected]     = useState<string[]>([]);
   const [queueProducts, setQueueProducts]                 = useState<ProductGroupInput[] | null>(null);
+  const [sheetStatusOverrides, setSheetStatusOverrides]   = useState<Record<string, "ACTIVE" | "DRAFT" | "ARCHIVED">>({});
+  const [savedMappingName, setSavedMappingName]           = useState("");
+  const [savedMappings, setSavedMappings]                 = useState<Array<{ name: string; data: Record<string, string> }>>([]);
 
   React.useEffect(() => {
     if (previewFetcher.data && "preview" in previewFetcher.data) {
       setQueueProducts(previewFetcher.data.products);
     }
   }, [previewFetcher.data]);
+
+  // Load saved mappings from localStorage on mount
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SUPPLIER_MAPPING_KEY);
+      if (raw) setSavedMappings(JSON.parse(raw));
+    } catch { /* ignore */ }
+  }, []);
+
+  function saveCurrentMapping() {
+    if (!formRef.current || !savedMappingName.trim()) return;
+    const fd = new FormData(formRef.current);
+    const data: Record<string, string> = {};
+    SUPPLIER_FIELDS.forEach(({ name }) => { data[name] = String(fd.get(name) ?? ""); });
+    data.defaultVendor = String(fd.get("defaultVendor") ?? "");
+    data.defaultProductType = String(fd.get("defaultProductType") ?? "");
+    data.defaultStatus = String(fd.get("defaultStatus") ?? "DRAFT");
+    data.retailMultiplier = String(fd.get("retailMultiplier") ?? "2.5");
+    data.wholesaleMultiplier = String(fd.get("wholesaleMultiplier") ?? "1.5");
+    const next = [...savedMappings.filter((m) => m.name !== savedMappingName.trim()), { name: savedMappingName.trim(), data }];
+    setSavedMappings(next);
+    try { localStorage.setItem(SUPPLIER_MAPPING_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  }
+
+  function loadMapping(mapping: { name: string; data: Record<string, string> }) {
+    if (!formRef.current) return;
+    const form = formRef.current;
+    Object.entries(mapping.data).forEach(([key, value]) => {
+      const el = form.elements.namedItem(key) as HTMLSelectElement | HTMLInputElement | null;
+      if (el) el.value = value;
+    });
+  }
+
+  function deleteMapping(name: string) {
+    const next = savedMappings.filter((m) => m.name !== name);
+    setSavedMappings(next);
+    try { localStorage.setItem(SUPPLIER_MAPPING_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  }
 
   const handlePreview = () => {
     if (!formRef.current) return;
@@ -1473,12 +1905,38 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
         </p>
       </div>
 
+      {/* ── Saved mappings ── */}
+      {savedMappings.length > 0 && (
+        <div style={{ marginBottom: "1rem", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.85rem 1rem" }}>
+          <div style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "#64748b", marginBottom: "0.5rem" }}>Saved column mappings</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+            {savedMappings.map((m) => (
+              <div key={m.name} style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                <button type="button" onClick={() => loadMapping(m)}
+                  style={{ ...darkButton, fontSize: "12px", padding: "0.3rem 0.65rem", background: "#ede9fe", borderColor: "#c4b5fd", color: "#6d28d9" }}>
+                  ↩ {m.name}
+                </button>
+                <button type="button" onClick={() => deleteMapping(m.name)}
+                  style={{ ...darkButton, fontSize: "11px", padding: "0.25rem 0.45rem", background: "#fef2f2", color: "#dc2626", borderColor: "#fecaca" }}
+                  title="Delete saved mapping">✕</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <Form ref={formRef} method="post" encType="multipart/form-data"
         style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
         <input type="hidden" name="intent" value="normalize-supplier" />
         <input type="hidden" name="locationId" value={selectedLocationId} />
         {tagColumnsSelected.map((col) => <input key={col} type="hidden" name="tagColumns" value={col} />)}
         {variantColsSelected.map((col) => <input key={col} type="hidden" name="variantTitleCols" value={col} />)}
+        {/* Per-sheet status overrides as hidden fields */}
+        {Object.entries(sheetStatusOverrides).map(([sheet, status]) => (
+          <React.Fragment key={sheet}>
+            <input type="hidden" name={`sheetStatus_${sheet}`} value={status} />
+          </React.Fragment>
+        ))}
 
         {/* ── File upload ── */}
         <div>
@@ -1505,17 +1963,36 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
         {/* ── Sheet selector ── */}
         {isExcel && excelInfo && (
           <div style={{ background: "#faf5ff", border: "1px solid #ddd6fe", borderRadius: "10px", padding: "1rem" }}>
-            {sectionTitle(`${excelInfo.sheets.length} sheets detected`, "Select which sheets to import:")}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+            {sectionTitle(`${excelInfo.sheets.length} sheets detected`, "Select which sheets to import and set per-sheet status:")}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
               {excelInfo.sheets.map((sheet) => (
-                <label key={sheet} style={{
-                  display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer",
-                  background: "#ede9fe", border: "1px solid #c4b5fd", borderRadius: "6px",
-                  padding: "0.3rem 0.65rem", fontSize: "12px", fontWeight: 500,
-                }}>
-                  <input type="checkbox" name="selectedSheets" value={sheet} defaultChecked />
-                  {sheet}
-                </label>
+                <div key={sheet} style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <label style={{
+                    display: "flex", alignItems: "center", gap: "0.4rem", cursor: "pointer",
+                    background: "#ede9fe", border: "1px solid #c4b5fd", borderRadius: "6px",
+                    padding: "0.3rem 0.65rem", fontSize: "12px", fontWeight: 500, flexShrink: 0,
+                  }}>
+                    <input type="checkbox" name="selectedSheets" value={sheet} defaultChecked />
+                    {sheet}
+                  </label>
+                  <select
+                    value={sheetStatusOverrides[sheet] ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value as "" | "ACTIVE" | "DRAFT" | "ARCHIVED";
+                      setSheetStatusOverrides((prev) => {
+                        const next = { ...prev };
+                        if (val) next[sheet] = val; else delete next[sheet];
+                        return next;
+                      });
+                    }}
+                    style={{ ...inputStyle, width: "auto", fontSize: "12px", flex: "0 0 auto" }}
+                  >
+                    <option value="">Status: use default</option>
+                    <option value="ACTIVE">Active</option>
+                    <option value="DRAFT">Draft</option>
+                    <option value="ARCHIVED">Archived</option>
+                  </select>
+                </div>
               ))}
             </div>
             {excelInfo.headers.length > 0 && (
@@ -1629,6 +2106,21 @@ function SupplierPanel({ selectedLocationId, isSubmitting }: { selectedLocationI
                     <option value="ARCHIVED">Archived</option>
                   </select>
                 </Field>
+              </div>
+            </div>
+
+            {/* ── Save mapping ── */}
+            <div style={{ paddingTop: "0.75rem", borderTop: "1px solid #e2e8f0" }}>
+              <div style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "#64748b", marginBottom: "0.4rem" }}>
+                Save current column mapping
+              </div>
+              <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                <input type="text" value={savedMappingName} onChange={(e) => setSavedMappingName(e.target.value)}
+                  placeholder="Mapping name (e.g. Supplier A)" style={{ ...inputStyle, flex: "1 1 160px", width: "auto", fontSize: "12px" }} />
+                <button type="button" onClick={saveCurrentMapping} disabled={!savedMappingName.trim()}
+                  style={{ ...darkButton, fontSize: "12px", padding: "0.42rem 0.75rem", background: "#f0fdf4", borderColor: "#86efac", color: "#166534" }}>
+                  💾 Save mapping
+                </button>
               </div>
             </div>
 
@@ -2003,9 +2495,19 @@ function QuickAssignPanel() {
                   )}
                 </div>
               </div>
-              <button type="button" onClick={() => setQueue((q) => q.slice(1))} style={darkButton}>
-                Skip →
-              </button>
+              <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                <a
+                  href={`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(current.title + (current.barcode ? " " + current.barcode : ""))}`}
+                  target="_blank" rel="noreferrer"
+                  style={{ ...darkButton, fontSize: "12px", padding: "0.35rem 0.65rem", textDecoration: "none", background: "#eff6ff", borderColor: "#bfdbfe", color: "#1d4ed8" }}
+                  title="Search Google Images for this product"
+                >
+                  🔍 Google Images
+                </a>
+                <button type="button" onClick={() => setQueue((q) => q.slice(1))} style={darkButton}>
+                  Skip →
+                </button>
+              </div>
             </div>
             {current.description && (
               <p style={{
