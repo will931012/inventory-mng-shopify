@@ -239,7 +239,8 @@ export async function action({ request }: ActionFunctionArgs) {
 
     if (intent === "set-zero-stock-to-two") {
       const dashboard = await fetchInventoryDashboard(admin, query, locationId);
-      const result = await setZeroStockVariantsToMinimum(admin, locationId, dashboard.products, 2);
+      const resolvedLocationId = dashboard.selectedLocationId || locationId;
+      const result = await setZeroStockVariantsToMinimum(admin, resolvedLocationId, dashboard.products, 2);
 
       if (result.updatedCount === 0 && result.errors.length === 0) {
         return json<ActionData>({
