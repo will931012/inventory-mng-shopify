@@ -1113,6 +1113,47 @@ export async function updateVariantInventory(
   await setInventoryQuantity(admin, inventoryItemId, locationId, quantity);
 }
 
+export async function setZeroStockVariantsToMinimum(
+  admin: AdminClient,
+  locationId: string,
+  products: InventoryProduct[],
+  minimumQuantity = 2
+) {
+  if (!locationId) {
+    throw new Error("No inventory location is available. Reinstall the app after adding read_locations.");
+  }
+
+  let updatedCount = 0;
+  let skippedUntrackedCount = 0;
+  const errors: string[] = [];
+
+  for (const product of products) {
+    for (const variant of product.variants) {
+      const locationLevel = variant.inventoryLevels.find((level) => level.locationId === locationId);
+      const currentQuantity = locationLevel?.available ?? variant.inventoryQuantity ?? 0;
+
+      if (currentQuantity !== 0) {
+        continue;
+      }
+
+      if (!variant.tracked) {
+        skippedUntrackedCount += 1;
+        continue;
+      }
+
+      try {
+        await updateVariantInventory(admin, locationId, variant.inventoryItemId, minimumQuantity);
+        updatedCount += 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown inventory update error.";
+        errors.push(`${product.title}${variant.title ? ` / ${variant.title}` : ""}: ${message}`);
+      }
+    }
+  }
+
+  return { updatedCount, skippedUntrackedCount, errors };
+}
+
 export async function deleteProducts(admin: AdminClient, productIds: string[]) {
   if (productIds.length === 0) {
     throw new Error("Select at least one product to delete.");

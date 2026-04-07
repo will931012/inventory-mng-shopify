@@ -26,6 +26,7 @@ import {
   importProductsFromCsv,
   normalizeExcelWorkbook,
   normalizeSupplierCsv,
+  setZeroStockVariantsToMinimum,
   updateProductRecord,
   updateVariantInventory
 } from "../inventory.server";
@@ -234,6 +235,29 @@ export async function action({ request }: ActionFunctionArgs) {
         Number(formData.get("quantity") ?? "0")
       );
       return json<ActionData>({ ok: true, message: "Inventory updated successfully." });
+    }
+
+    if (intent === "set-zero-stock-to-two") {
+      const dashboard = await fetchInventoryDashboard(admin, query, locationId);
+      const result = await setZeroStockVariantsToMinimum(admin, locationId, dashboard.products, 2);
+
+      if (result.updatedCount === 0 && result.errors.length === 0) {
+        return json<ActionData>({
+          ok: true,
+          message: "No variants with stock 0 were found in this view."
+        });
+      }
+
+      const messageParts = [`${result.updatedCount} variant(s) with stock 0 updated to 2.`];
+      if (result.skippedUntrackedCount > 0) {
+        messageParts.push(`${result.skippedUntrackedCount} untracked variant(s) skipped.`);
+      }
+
+      return json<ActionData>({
+        ok: result.errors.length === 0,
+        message: messageParts.join(" "),
+        errors: result.errors
+      });
     }
 
     if (intent === "update-product") {
@@ -1308,6 +1332,13 @@ function OperationsPanel({
   const dupUPCFetcher    = useFetcher<{ duplicateUPCs?: DuplicateUPCGroup[] }>();
 
   const zeroInView = products.filter((p) => p.variants.some((v) => Number(v.price ?? "0") === 0));
+  const zeroStockVariantsInView = products.reduce((total, product) => {
+    return total + product.variants.filter((variant) => {
+      const level = variant.inventoryLevels.find((item) => item.locationId === selectedLocationId);
+      const quantity = level?.available ?? variant.inventoryQuantity ?? 0;
+      return variant.tracked && quantity === 0;
+    }).length;
+  }, 0);
   const priceSanityIssues = products.filter((p) => {
     const v = p.variants[0];
     if (!v) return false;
@@ -1319,6 +1350,7 @@ function OperationsPanel({
 
   const deletingView = isSubmitting && submittingIntent === "delete-products-with-zero-price";
   const deletingAll  = isSubmitting && submittingIntent === "delete-all-products-with-zero-price";
+  const fixingZeroStock = isSubmitting && submittingIntent === "set-zero-stock-to-two";
 
   const noBarcodeProducts = noBarcodeFetcher.data?.noBarcodeProducts ?? null;
   const duplicateUPCs     = dupUPCFetcher.data?.duplicateUPCs ?? null;
@@ -1434,6 +1466,33 @@ function OperationsPanel({
         {duplicateUPCs !== null && duplicateUPCs.length === 0 && (
           <p style={{ margin: 0, fontSize: "12px", color: "#15803d" }}>✓ No duplicate barcodes found.</p>
         )}
+      </article>
+
+      {/* ── Zero-stock fixer ── */}
+      <article style={panelStyle}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>Fix stock 0 to 2</h2>
+            <p style={{ margin: "0.15rem 0 0", fontSize: "12px", color: "#64748b" }}>
+              Applies to the current filtered view and only to tracked variants with stock 0.{" "}
+              {zeroStockVariantsInView > 0
+                ? <strong style={{ color: "#b45309" }}>{zeroStockVariantsInView} variant(s) found.</strong>
+                : "None found."}
+            </p>
+          </div>
+          <Form method="post" onSubmit={(e) => { if (!window.confirm(`Set ${zeroStockVariantsInView} zero-stock variant(s) to quantity 2?`)) e.preventDefault(); }}>
+            <input type="hidden" name="intent" value="set-zero-stock-to-two" />
+            <input type="hidden" name="locationId" value={selectedLocationId} />
+            <input type="hidden" name="query" value={query} />
+            <button
+              type="submit"
+              disabled={isSubmitting || zeroStockVariantsInView === 0}
+              style={{ ...darkButton, background: "#fffbeb", color: "#b45309", borderColor: "#fcd34d" }}
+            >
+              {fixingZeroStock ? "Updating..." : "Set stock 0 -> 2"}
+            </button>
+          </Form>
+        </div>
       </article>
 
       {/* ── Danger Zone ── */}
