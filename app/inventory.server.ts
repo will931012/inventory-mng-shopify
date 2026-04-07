@@ -479,8 +479,18 @@ export async function fetchInventoryDashboard(
     };
   }
 
-  type FullPageResult     = { shop: ShopSummary & { productsCount: { count: number } }; products: { nodes: FullNode[];     pageInfo: PageInfo } };
-  type FallbackPageResult = { shop: ShopSummary & { productsCount: { count: number } }; products: { nodes: FallbackNode[]; pageInfo: PageInfo } };
+  type FullPageResult     = { shop: ShopSummary; products: { nodes: FullNode[];     pageInfo: PageInfo } };
+  type FallbackPageResult = { shop: ShopSummary; products: { nodes: FallbackNode[]; pageInfo: PageInfo } };
+
+  // ── Fetch real product count separately (non-critical) ────────────────────
+  let totalStoreProducts = 0;
+  try {
+    const countData = await executeGraphQL<{ productsCount: { count: number } }>(
+      admin,
+      `#graphql query StoreProductCount { productsCount { count } }`
+    );
+    totalStoreProducts = countData.productsCount?.count ?? 0;
+  } catch { /* non-critical, ignore */ }
 
   // ── Full query with inventory levels (paginated) ────────────────────────────
   try {
@@ -494,7 +504,7 @@ export async function fetchInventoryDashboard(
         admin,
         `#graphql
           query InventoryDashboard($query: String!, $cursor: String) {
-            shop { name myshopifyDomain currencyCode productsCount { count } }
+            shop { name myshopifyDomain currencyCode }
             products(first: 40, after: $cursor, sortKey: UPDATED_AT, reverse: true, query: $query) {
               nodes {
                 id title handle status vendor productType tags totalInventory updatedAt
@@ -530,7 +540,7 @@ export async function fetchInventoryDashboard(
       if (!cursor) hasMore = false;
     }
 
-    return { shop, locations, selectedLocationId, products: allProducts, summary: buildSummary(allProducts, (shop as (ShopSummary & { productsCount?: { count: number } }) | null)?.productsCount?.count ?? 0) };
+    return { shop, locations, selectedLocationId, products: allProducts, summary: buildSummary(allProducts, totalStoreProducts) };
 
   } catch (error) {
     // ── Fallback: simpler query without metafields/cost (paginated) ───────────
@@ -545,7 +555,7 @@ export async function fetchInventoryDashboard(
           admin,
           `#graphql
             query InventoryDashboardFallback($query: String!, $cursor: String) {
-              shop { name myshopifyDomain currencyCode productsCount { count } }
+              shop { name myshopifyDomain currencyCode }
               products(first: 40, after: $cursor, sortKey: UPDATED_AT, reverse: true, query: $query) {
                 nodes {
                   id title handle status vendor productType tags totalInventory updatedAt
@@ -580,7 +590,7 @@ export async function fetchInventoryDashboard(
           error instanceof Error
             ? `Some advanced inventory features failed to load: ${error.message}`
             : "Some advanced inventory features failed to load.",
-        summary: buildSummary(allProducts, (shop as (ShopSummary & { productsCount?: { count: number } }) | null)?.productsCount?.count ?? 0),
+        summary: buildSummary(allProducts, totalStoreProducts),
       };
     } catch {
       return {
