@@ -64,6 +64,7 @@ export type InventoryDashboardData = {
   shop: ShopSummary | null;
   locations: LocationSummary[];
   selectedLocationId: string;
+  locationsAccessDenied?: boolean;
   products: InventoryProduct[];
   loadWarning?: string;
   summary: {
@@ -300,7 +301,7 @@ async function executeGraphQL<TData>(
   throw new Error("Shopify request failed after retries.");
 }
 
-async function fetchLocations(admin: AdminClient) {
+async function fetchLocations(admin: AdminClient): Promise<{ nodes: LocationSummary[]; accessDenied: boolean }> {
   try {
     const data = await executeGraphQL<{
       locations: {
@@ -327,9 +328,11 @@ async function fetchLocations(admin: AdminClient) {
       `
     );
 
-    return data.locations.nodes;
-  } catch {
-    return [];
+    return { nodes: data.locations.nodes, accessDenied: false };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const accessDenied = /access denied|unauthorized|forbidden|read_locations/i.test(message);
+    return { nodes: [], accessDenied };
   }
 }
 
@@ -338,8 +341,8 @@ async function resolveInventoryLocationId(admin: AdminClient, preferredLocationI
     return preferredLocationId;
   }
 
-  const locations = await fetchLocations(admin);
-  return locations[0]?.id ?? "";
+  const { nodes } = await fetchLocations(admin);
+  return nodes[0]?.id ?? "";
 }
 
 export async function fetchAllProductIdsWithZeroPrice(admin: AdminClient) {
@@ -402,7 +405,7 @@ export async function fetchInventoryDashboard(
   searchQuery: string,
   preferredLocationId?: string | null
 ): Promise<InventoryDashboardData> {
-  const locations = await fetchLocations(admin);
+  const { nodes: locations, accessDenied: locationsAccessDenied } = await fetchLocations(admin);
   const selectedLocationId =
     preferredLocationId && locations.some((l) => l.id === preferredLocationId)
       ? preferredLocationId
@@ -570,7 +573,7 @@ export async function fetchInventoryDashboard(
       if (!cursor) hasMore = false;
     }
 
-    return { shop, locations, selectedLocationId, products: allProducts, summary: buildSummary(allProducts, totalStoreProducts) };
+    return { shop, locations, selectedLocationId, locationsAccessDenied, products: allProducts, summary: buildSummary(allProducts, totalStoreProducts) };
 
   } catch (error) {
     // ── Fallback: simpler query without metafields/cost (paginated) ───────────
@@ -615,6 +618,7 @@ export async function fetchInventoryDashboard(
         shop,
         locations,
         selectedLocationId,
+        locationsAccessDenied,
         products: allProducts,
         loadWarning:
           error instanceof Error
@@ -626,7 +630,7 @@ export async function fetchInventoryDashboard(
       };
     } catch {
       return {
-        shop: null, locations, selectedLocationId,
+        shop: null, locations, selectedLocationId, locationsAccessDenied,
         products: [],
         loadWarning: "Failed to load products. Please refresh.",
         summary: { productCount: 0, variantCount: 0, inventoryUnits: 0, totalStoreProducts: 0 },

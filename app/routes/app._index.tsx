@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
+import { json, redirect } from "@remix-run/node";
 import { Form, Link, useActionData, useFetcher, useLoaderData, useLocation, useNavigation } from "@remix-run/react";
 import React, { useState, useRef } from "react";
 import type { CSSProperties } from "react";
@@ -141,6 +141,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     url.searchParams.get("q") ?? "",
     url.searchParams.get("locationId")
   );
+
+  if (dashboard.locationsAccessDenied) {
+    throw redirect("/auth");
+  }
 
   return json({
     ...dashboard,
@@ -601,7 +605,7 @@ export default function AppDashboard() {
           <div style={{ marginBottom: "1.25rem" }}>
             <Banner
               ok={false}
-              message="No inventory location is available. Add read_locations to SCOPES in .env, then reinstall or reauthorize the Shopify app."
+              message="No inventory location is available. Please reinstall or reauthorize the Shopify app, then refresh."
             />
           </div>
         )}
