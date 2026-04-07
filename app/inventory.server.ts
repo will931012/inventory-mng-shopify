@@ -1190,6 +1190,29 @@ export async function setZeroStockVariantsToMinimum(
   return { updatedCount, skippedUntrackedCount, errors };
 }
 
+export async function setInventoryItemsToMinimum(
+  admin: AdminClient,
+  locationId: string,
+  inventoryItemIds: string[],
+  minimumQuantity = 2
+) {
+  const uniqueInventoryItemIds = [...new Set(inventoryItemIds.filter(Boolean))];
+  const errors: string[] = [];
+  let updatedCount = 0;
+
+  for (const inventoryItemId of uniqueInventoryItemIds) {
+    try {
+      await updateVariantInventory(admin, locationId, inventoryItemId, minimumQuantity);
+      updatedCount += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown inventory update error.";
+      errors.push(`${inventoryItemId}: ${message}`);
+    }
+  }
+
+  return { updatedCount, errors };
+}
+
 export async function deleteProducts(admin: AdminClient, productIds: string[]) {
   if (productIds.length === 0) {
     throw new Error("Select at least one product to delete.");

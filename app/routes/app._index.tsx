@@ -26,6 +26,7 @@ import {
   importProductsFromCsv,
   normalizeExcelWorkbook,
   normalizeSupplierCsv,
+  setInventoryItemsToMinimum,
   setZeroStockVariantsToMinimum,
   updateProductRecord,
   updateVariantInventory
@@ -238,9 +239,17 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     if (intent === "set-zero-stock-to-two") {
-      const dashboard = await fetchInventoryDashboard(admin, query, locationId);
-      const resolvedLocationId = dashboard.selectedLocationId || locationId;
-      const result = await setZeroStockVariantsToMinimum(admin, resolvedLocationId, dashboard.products, 2);
+      const inventoryItemIds = formData.getAll("inventoryItemIds").map(String).filter(Boolean);
+      let result:
+        | { updatedCount: number; errors: string[]; skippedUntrackedCount?: number };
+
+      if (inventoryItemIds.length > 0) {
+        result = await setInventoryItemsToMinimum(admin, locationId, inventoryItemIds, 2);
+      } else {
+        const dashboard = await fetchInventoryDashboard(admin, query, locationId);
+        const resolvedLocationId = dashboard.selectedLocationId || locationId;
+        result = await setZeroStockVariantsToMinimum(admin, resolvedLocationId, dashboard.products, 2);
+      }
 
       if (result.updatedCount === 0 && result.errors.length === 0) {
         return json<ActionData>({
@@ -250,7 +259,7 @@ export async function action({ request }: ActionFunctionArgs) {
       }
 
       const messageParts = [`${result.updatedCount} variant(s) with stock 0 updated to 2.`];
-      if (result.skippedUntrackedCount > 0) {
+      if ((result.skippedUntrackedCount ?? 0) > 0) {
         messageParts.push(`${result.skippedUntrackedCount} untracked variant(s) skipped.`);
       }
 
@@ -1350,6 +1359,13 @@ function OperationsPanel({
   const hasInventoryLocation = Boolean(selectedLocationId);
 
   const zeroInView = products.filter((p) => p.variants.some((v) => Number(v.price ?? "0") === 0));
+  const zeroStockVariants = products.flatMap((product) =>
+    product.variants.filter((variant) => {
+      const level = variant.inventoryLevels.find((item) => item.locationId === selectedLocationId);
+      const quantity = level?.available ?? variant.inventoryQuantity ?? 0;
+      return variant.tracked && quantity === 0;
+    })
+  );
   const zeroStockVariantsInView = products.reduce((total, product) => {
     return total + product.variants.filter((variant) => {
       const level = variant.inventoryLevels.find((item) => item.locationId === selectedLocationId);
@@ -1502,6 +1518,9 @@ function OperationsPanel({
             <input type="hidden" name="intent" value="set-zero-stock-to-two" />
             <input type="hidden" name="locationId" value={selectedLocationId} />
             <input type="hidden" name="query" value={query} />
+            {zeroStockVariants.map((variant) => (
+              <input key={variant.inventoryItemId} type="hidden" name="inventoryItemIds" value={variant.inventoryItemId} />
+            ))}
             <button
               type="submit"
               disabled={isSubmitting || zeroStockVariantsInView === 0 || !hasInventoryLocation}
