@@ -583,8 +583,8 @@ export async function fetchInventoryDashboard(
 
       return {
         shop,
-        locations: [],
-        selectedLocationId: "",
+        locations,
+        selectedLocationId,
         products: allProducts,
         loadWarning:
           error instanceof Error
@@ -594,7 +594,7 @@ export async function fetchInventoryDashboard(
       };
     } catch {
       return {
-        shop: null, locations: [], selectedLocationId: "",
+        shop: null, locations, selectedLocationId,
         products: [],
         loadWarning: "Failed to load products. Please refresh.",
         summary: { productCount: 0, variantCount: 0, inventoryUnits: 0, totalStoreProducts: 0 },
