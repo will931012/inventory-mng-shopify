@@ -143,6 +143,14 @@ type GraphQLResponse<T> = {
   errors?: GraphQLError[];
 };
 
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isThrottleErrorMessage(message: string) {
+  return message.toLowerCase().includes("throttled");
+}
+
 type ProductsWithZeroPricePage = {
   products: {
     edges: Array<{
@@ -265,18 +273,31 @@ async function executeGraphQL<TData>(
   query: string,
   variables?: Record<string, unknown>
 ) {
-  const response = await admin.graphql(query, variables ? { variables } : undefined);
-  const payload = (await response.json()) as GraphQLResponse<TData>;
+  const maxAttempts = 3;
 
-  if (payload.errors?.length) {
-    throw new Error(payload.errors.map((error) => error.message).join("; "));
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await admin.graphql(query, variables ? { variables } : undefined);
+    const payload = (await response.json()) as GraphQLResponse<TData>;
+
+    if (payload.errors?.length) {
+      const message = payload.errors.map((error) => error.message).join("; ");
+
+      if (attempt < maxAttempts && isThrottleErrorMessage(message)) {
+        await delay(300 * attempt);
+        continue;
+      }
+
+      throw new Error(message);
+    }
+
+    if (!payload.data) {
+      throw new Error("Shopify did not return data.");
+    }
+
+    return payload.data;
   }
 
-  if (!payload.data) {
-    throw new Error("Shopify did not return data.");
-  }
-
-  return payload.data;
+  throw new Error("Shopify request failed after retries.");
 }
 
 async function fetchLocations(admin: AdminClient) {
@@ -597,7 +618,9 @@ export async function fetchInventoryDashboard(
         products: allProducts,
         loadWarning:
           error instanceof Error
-            ? `Some advanced inventory features failed to load: ${error.message}`
+            ? isThrottleErrorMessage(error.message)
+              ? undefined
+              : `Some advanced inventory features failed to load: ${error.message}`
             : "Some advanced inventory features failed to load.",
         summary: buildSummary(allProducts, totalStoreProducts),
       };
