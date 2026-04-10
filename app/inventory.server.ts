@@ -331,6 +331,7 @@ async function fetchLocations(admin: AdminClient): Promise<{ nodes: LocationSumm
     return { nodes: data.locations.nodes, accessDenied: false };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    console.error("[fetchLocations] failed:", message);
     const accessDenied = /access denied|unauthorized|forbidden|read_locations/i.test(message);
     return { nodes: [], accessDenied };
   }
