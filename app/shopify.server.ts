@@ -25,6 +25,9 @@ const shopify = shopifyApp({
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
   isEmbeddedApp: true,
+  future: {
+    unstable_newEmbeddedAuthStrategy: true,
+  },
   hooks: {
     afterAuth: async ({ session }) => {
       await shopify.registerWebhooks({ session });
