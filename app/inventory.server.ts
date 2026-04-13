@@ -576,7 +576,13 @@ export async function fetchInventoryDashboard(
       if (!cursor) hasMore = false;
     }
 
-    return { shop, locations, selectedLocationId, locationsAccessDenied, products: allProducts, summary: buildSummary(allProducts, totalStoreProducts) };
+    return {
+      shop, locations, selectedLocationId, locationsAccessDenied, products: allProducts,
+      summary: buildSummary(allProducts, totalStoreProducts),
+      loadWarning: locationsAccessDenied
+        ? "No tienes permiso para leer ubicaciones (read_locations). Desinstala y reinstala la app para reautorizar."
+        : undefined,
+    };
 
   } catch (error) {
     // ── Fallback: simpler query without metafields/cost (paginated) ───────────
