@@ -348,6 +348,29 @@ async function resolveInventoryLocationId(admin: AdminClient, preferredLocationI
   return nodes[0]?.id ?? "";
 }
 
+function deriveLocationsFromProducts(products: InventoryProduct[]): LocationSummary[] {
+  const seen = new Map<string, LocationSummary>();
+
+  for (const product of products) {
+    for (const variant of product.variants) {
+      for (const level of variant.inventoryLevels) {
+        if (!level.locationId || seen.has(level.locationId)) {
+          continue;
+        }
+
+        seen.set(level.locationId, {
+          id: level.locationId,
+          name: level.locationName || level.locationId,
+          isActive: true,
+          fulfillsOnlineOrders: false,
+        });
+      }
+    }
+  }
+
+  return [...seen.values()];
+}
+
 export async function fetchAllProductIdsWithZeroPrice(admin: AdminClient) {
   const productIds: string[] = [];
   let cursor: string | null = null;
@@ -409,7 +432,7 @@ export async function fetchInventoryDashboard(
   preferredLocationId?: string | null
 ): Promise<InventoryDashboardData> {
   const { nodes: locations, accessDenied: locationsAccessDenied } = await fetchLocations(admin);
-  const selectedLocationId =
+  const fallbackSelectedLocationId =
     preferredLocationId && locations.some((l) => l.id === preferredLocationId)
       ? preferredLocationId
       : locations[0]?.id ?? "";
@@ -576,12 +599,20 @@ export async function fetchInventoryDashboard(
       if (!cursor) hasMore = false;
     }
 
+    const effectiveLocations = locations.length > 0 ? locations : deriveLocationsFromProducts(allProducts);
+    const selectedLocationId =
+      preferredLocationId && effectiveLocations.some((l) => l.id === preferredLocationId)
+        ? preferredLocationId
+        : effectiveLocations[0]?.id ?? "";
+
     return {
-      shop, locations, selectedLocationId, locationsAccessDenied, products: allProducts,
+      shop, locations: effectiveLocations, selectedLocationId, locationsAccessDenied, products: allProducts,
       summary: buildSummary(allProducts, totalStoreProducts),
       loadWarning: locationsAccessDenied
         ? "No tienes permiso para leer ubicaciones (read_locations). Desinstala y reinstala la app para reautorizar."
-        : undefined,
+        : locations.length === 0 && effectiveLocations.length > 0
+          ? "Shopify no devolvio ubicaciones en la consulta principal, pero se recuperaron desde los niveles de inventario."
+          : undefined,
     };
 
   } catch (error) {
@@ -626,7 +657,7 @@ export async function fetchInventoryDashboard(
       return {
         shop,
         locations,
-        selectedLocationId,
+        selectedLocationId: fallbackSelectedLocationId,
         locationsAccessDenied,
         products: allProducts,
         loadWarning:
@@ -639,7 +670,7 @@ export async function fetchInventoryDashboard(
       };
     } catch {
       return {
-        shop: null, locations, selectedLocationId, locationsAccessDenied,
+        shop: null, locations, selectedLocationId: fallbackSelectedLocationId, locationsAccessDenied,
         products: [],
         loadWarning: "Failed to load products. Please refresh.",
         summary: { productCount: 0, variantCount: 0, inventoryUnits: 0, totalStoreProducts: 0 },

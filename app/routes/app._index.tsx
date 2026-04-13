@@ -601,7 +601,11 @@ export default function AppDashboard() {
           <div style={{ marginBottom: "1.25rem" }}>
             <Banner
               ok={false}
-              message="No inventory location is available. Please reinstall or reauthorize the Shopify app, then refresh."
+              message={
+                data.locationsAccessDenied
+                  ? "No inventory location is available because Shopify denied location access. Reinstall or reauthorize the app, then refresh."
+                  : "No inventory location is available for this Shopify session. Verify the app URL and scopes match the current install, then reinstall or reauthorize and refresh."
+              }
             />
           </div>
         )}
