@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { json } from "@remix-run/node";
+import { json, redirect } from "@remix-run/node";
 import { Form, Link, useActionData, useFetcher, useLoaderData, useLocation, useNavigation } from "@remix-run/react";
 import React, { useState, useRef } from "react";
 import type { CSSProperties } from "react";
@@ -134,13 +134,17 @@ function readProductInput(formData: FormData) {
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const dashboard = await fetchInventoryDashboard(
     admin,
     url.searchParams.get("q") ?? "",
     url.searchParams.get("locationId")
   );
+
+  if (dashboard.locationsAccessDenied) {
+    throw redirect(`/auth?shop=${session.shop}`);
+  }
 
   return json({
     ...dashboard,
