@@ -10,10 +10,13 @@ import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prism
 
 import prisma from "./db.server";
 
-const scopes =
-  process.env.SCOPES?.split(",")
-    .map((scope) => scope.trim())
-    .filter(Boolean) ?? [];
+const scopes = [
+  "write_products",
+  "read_products",
+  "write_inventory",
+  "read_inventory",
+  "read_locations",
+];
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY ?? "",
