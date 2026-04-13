@@ -108,6 +108,26 @@ export default function AppLayout() {
             <strong style={{ display: "block", marginTop: "0.25rem", wordBreak: "break-word", fontSize: "12px" }}>
               {shop}
             </strong>
+            <a
+              href={`https://${shop}/admin/apps`}
+              target="_top"
+              style={{
+                display: "block",
+                marginTop: "0.6rem",
+                padding: "0.45rem 0.6rem",
+                fontSize: "11px",
+                fontWeight: 600,
+                color: "#b91c1c",
+                background: "#fef2f2",
+                border: "1px solid #fecaca",
+                borderRadius: "6px",
+                textDecoration: "none",
+                textAlign: "center",
+                cursor: "pointer"
+              }}
+            >
+              Exit / Uninstall app
+            </a>
           </div>
         </aside>
 
